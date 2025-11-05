@@ -3,15 +3,14 @@ import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome.components import number
 from esphome.const import CONF_ID, UNIT_FAHRENHEIT
-from . import CosoriKettleBLE, CONF_COSORI_KETTLE_BLE_ID, cosori_kettle_ble_ns
+from . import COSORI_KETTLE_BLE_COMPONENT_SCHEMA, CONF_COSORI_KETTLE_BLE_ID, cosori_kettle_ble_ns
 
 CONF_TARGET_SETPOINT = "target_setpoint"
 
 CosoriKettleNumber = cosori_kettle_ble_ns.class_("CosoriKettleNumber", number.Number, cg.Component)
 
-CONFIG_SCHEMA = cv.Schema(
+CONFIG_SCHEMA = COSORI_KETTLE_BLE_COMPONENT_SCHEMA.extend(
     {
-        cv.GenerateID(CONF_COSORI_KETTLE_BLE_ID): cv.use_id(CosoriKettleBLE),
         cv.Optional(CONF_TARGET_SETPOINT): number.NUMBER_SCHEMA.extend(
             {
                 cv.GenerateID(): cv.declare_id(CosoriKettleNumber),

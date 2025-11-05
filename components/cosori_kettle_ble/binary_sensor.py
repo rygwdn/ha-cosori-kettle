@@ -3,14 +3,13 @@ import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome.components import binary_sensor
 from esphome.const import CONF_ID
-from . import CosoriKettleBLE, CONF_COSORI_KETTLE_BLE_ID, cosori_kettle_ble_ns
+from . import COSORI_KETTLE_BLE_COMPONENT_SCHEMA, CONF_COSORI_KETTLE_BLE_ID
 
 CONF_ON_BASE = "on_base"
 CONF_HEATING = "heating"
 
-CONFIG_SCHEMA = cv.Schema(
+CONFIG_SCHEMA = COSORI_KETTLE_BLE_COMPONENT_SCHEMA.extend(
     {
-        cv.GenerateID(CONF_COSORI_KETTLE_BLE_ID): cv.use_id(CosoriKettleBLE),
         cv.Optional(CONF_ON_BASE): binary_sensor.binary_sensor_schema(),
         cv.Optional(CONF_HEATING): binary_sensor.binary_sensor_schema(),
     }

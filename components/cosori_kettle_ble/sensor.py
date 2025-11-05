@@ -9,13 +9,12 @@ from esphome.const import (
     STATE_CLASS_MEASUREMENT,
     UNIT_FAHRENHEIT,
 )
-from . import CosoriKettleBLE, CONF_COSORI_KETTLE_BLE_ID, cosori_kettle_ble_ns
+from . import COSORI_KETTLE_BLE_COMPONENT_SCHEMA, CONF_COSORI_KETTLE_BLE_ID
 
 CONF_KETTLE_SETPOINT = "kettle_setpoint"
 
-CONFIG_SCHEMA = cv.Schema(
+CONFIG_SCHEMA = COSORI_KETTLE_BLE_COMPONENT_SCHEMA.extend(
     {
-        cv.GenerateID(CONF_COSORI_KETTLE_BLE_ID): cv.use_id(CosoriKettleBLE),
         cv.Optional(CONF_TEMPERATURE): sensor.sensor_schema(
             unit_of_measurement=UNIT_FAHRENHEIT,
             accuracy_decimals=0,

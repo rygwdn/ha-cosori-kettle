@@ -15,6 +15,12 @@ CosoriKettleBLE = cosori_kettle_ble_ns.class_(
     "CosoriKettleBLE", ble_client.BLEClientNode, cg.PollingComponent
 )
 
+COSORI_KETTLE_BLE_COMPONENT_SCHEMA = cv.Schema(
+    {
+        cv.GenerateID(CONF_COSORI_KETTLE_BLE_ID): cv.use_id(CosoriKettleBLE),
+    }
+)
+
 CONFIG_SCHEMA = (
     cv.Schema(
         {
