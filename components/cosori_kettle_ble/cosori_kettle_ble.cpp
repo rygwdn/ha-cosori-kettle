@@ -362,29 +362,22 @@ void CosoriKettleBLE::parse_compact_status_(const uint8_t *payload, size_t len) 
   if (len < 9 || payload[0] != 0x01 || payload[1] != 0x41)
     return;
 
-  uint8_t stage = payload[4];     // Byte 10: 0x01=on-base, 0x00=off-base
-  uint8_t mode = payload[5];      // Byte 11
+  uint8_t stage = payload[4];     // Heating stage
+  uint8_t mode = payload[5];      // Mode
   uint8_t sp = payload[6];        // Setpoint temperature
   uint8_t temp = payload[7];      // Current temperature
-  uint8_t status = payload[8];    // Byte 14: heating status
+  uint8_t status = payload[8];    // Heating status
 
   // Validate temperature range
   if (temp < 40 || temp > 230)
     return;
 
-  // Update state
+  // Update state (temp, setpoint, heating only - no on-base detection from compact packets)
   this->current_temp_f_ = temp;
   this->kettle_setpoint_f_ = sp;
-  bool prev_on_base = this->on_base_;
-  this->on_base_ = (stage != 0);  // Use byte 10 (payload[4]) for on-base detection
   this->heating_ = (status != 0);
   this->status_received_ = true;
   this->last_status_seq_ = this->last_rx_seq_;
-
-  // Log when on_base state changes
-  if (prev_on_base != this->on_base_) {
-    ESP_LOGI(TAG, "On-base: %s (stage=0x%02x)", this->on_base_ ? "ON" : "OFF", stage);
-  }
 
   // Reset offline counter
   this->reset_online_status_();
@@ -394,9 +387,9 @@ void CosoriKettleBLE::parse_compact_status_(const uint8_t *payload, size_t len) 
 }
 
 void CosoriKettleBLE::parse_extended_status_(const uint8_t *payload, size_t len) {
-  // Extended status: 01 40 40 00 <stage> <mode> <sp> <temp> ...
-  // NOTE: Extended packets have a different structure than compact packets.
-  // On-base detection should only be done from compact (A5 22) packets.
+  // Extended status: 01 40 40 00 <stage> <mode> <sp> <temp> ... <on_base> ...
+  // NOTE: Extended packets (A5 12, len=29) contain on-base detection at payload[18]
+  // Compact packets (A5 22, len=12) do NOT contain on-base information
   if (len < 8 || payload[0] != 0x01 || payload[1] != 0x40)
     return;
 
@@ -409,12 +402,24 @@ void CosoriKettleBLE::parse_extended_status_(const uint8_t *payload, size_t len)
   if (temp < 40 || temp > 230)
     return;
 
-  // Update state (temp and setpoint only - don't update on_base from extended packets)
+  // Update state (temp, setpoint, heating)
   this->current_temp_f_ = temp;
   this->kettle_setpoint_f_ = sp;
   this->heating_ = (stage != 0);
   this->status_received_ = true;
   this->last_status_seq_ = this->last_rx_seq_;
+
+  // On-base detection from payload[18] (if available)
+  if (len >= 19) {
+    uint8_t on_base_byte = payload[18];
+    bool prev_on_base = this->on_base_;
+    this->on_base_ = (on_base_byte == 0x00);  // 0x00=on-base, 0x01=off-base
+
+    if (prev_on_base != this->on_base_) {
+      ESP_LOGI(TAG, "On-base: %s (payload[18]=0x%02x)",
+               this->on_base_ ? "ON" : "OFF", on_base_byte);
+    }
+  }
 
   // Reset offline counter
   this->reset_online_status_();
