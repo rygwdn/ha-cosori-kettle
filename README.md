@@ -108,6 +108,18 @@ switch:
 
 The kettle **automatically appears as a climate entity** in Home Assistant when you add the component! This means you can use the beautiful native **thermostat card** with its semi-circle temperature slider right away.
 
+### Home Assistant Integration
+
+Here's what the integration looks like in Home Assistant:
+
+![Home Assistant Integration](Screenshot.png)
+
+The component provides:
+- **Climate entity** (Kettle) - Off/Heat mode with temperature control
+- **Switches** - BLE Connection toggle, Heating control
+- **Sensors** - Temperature, Setpoint, On Base status, Heating status
+- **Number slider** - Target temperature adjustment (104-212°F)
+
 ### Customizing the Climate Entity Name
 
 In your ESPHome config, you can optionally set a name for the climate entity:
