@@ -340,33 +340,15 @@ void CosoriKettleBLE::process_frame_buffer_() {
 }
 
 void CosoriKettleBLE::parse_compact_status_(const uint8_t *payload, size_t len) {
-  // Check for off-base packet: length 4, payload [0x00, 0x40, 0x40, 0x00]
-  if (len == 4 && payload[0] == 0x00 && payload[1] == 0x40 && payload[2] == 0x40 && payload[3] == 0x00) {
-    ESP_LOGD(TAG, "Off-base packet detected");
-    this->on_base_ = false;
-    this->heating_ = false;
-    this->status_received_ = true;
-    this->last_status_seq_ = this->last_rx_seq_;
-
-    // Reset offline counter
-    this->reset_online_status_();
-
-    // Update entities
-    this->update_entities_();
-
-    ESP_LOGV(TAG, "Kettle off base");
-    return;
-  }
-
   // Compact status: 01 41 40 00 <stage> <mode> <sp> <temp> <status> ...
   if (len < 9 || payload[0] != 0x01 || payload[1] != 0x41)
     return;
 
-  uint8_t stage = payload[4];
-  uint8_t mode = payload[5];
-  uint8_t sp = payload[6];
-  uint8_t temp = payload[7];
-  uint8_t status = payload[8];
+  uint8_t stage = payload[4];     // Byte 10: 0x01=on-base, 0x00=off-base
+  uint8_t mode = payload[5];      // Byte 11
+  uint8_t sp = payload[6];        // Setpoint temperature
+  uint8_t temp = payload[7];      // Current temperature
+  uint8_t status = payload[8];    // Byte 14: heating status
 
   // Validate temperature range
   if (temp < 40 || temp > 230)
@@ -375,7 +357,7 @@ void CosoriKettleBLE::parse_compact_status_(const uint8_t *payload, size_t len) 
   // Update state
   this->current_temp_f_ = temp;
   this->kettle_setpoint_f_ = sp;
-  this->on_base_ = true;  // Normal status packet means on base
+  this->on_base_ = (stage != 0);  // Use byte 10 (payload[4]) for on-base detection
   this->heating_ = (status != 0);
   this->status_received_ = true;
   this->last_status_seq_ = this->last_rx_seq_;
