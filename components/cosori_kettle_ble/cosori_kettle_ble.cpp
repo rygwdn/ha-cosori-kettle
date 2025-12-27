@@ -9,6 +9,10 @@ namespace cosori_kettle_ble {
 
 static const char *const TAG = "cosori_kettle_ble";
 
+// Buffer size limits
+static constexpr size_t MAX_FRAME_BUFFER_SIZE = 512;
+static constexpr size_t MAX_PAYLOAD_SIZE = 256;
+
 // BLE UUIDs
 static const char *COSORI_SERVICE_UUID = "0000fff0-0000-1000-8000-00805f9b34fb";
 static const char *COSORI_RX_CHAR_UUID = "0000fff1-0000-1000-8000-00805f9b34fb";
@@ -133,6 +137,13 @@ void CosoriKettleBLE::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_i
         hex_str += buf;
       }
       ESP_LOGD(TAG, "RX: %s", hex_str.c_str());
+
+      // Check buffer size limit before appending
+      if (this->frame_buffer_.size() + param->notify.value_len > MAX_FRAME_BUFFER_SIZE) {
+        ESP_LOGW(TAG, "Frame buffer overflow (%zu + %d > %zu), clearing buffer",
+                 this->frame_buffer_.size(), param->notify.value_len, MAX_FRAME_BUFFER_SIZE);
+        this->frame_buffer_.clear();
+      }
 
       // Append to frame buffer
       this->frame_buffer_.insert(this->frame_buffer_.end(), param->notify.value,
@@ -359,6 +370,13 @@ void CosoriKettleBLE::process_frame_buffer_() {
     uint16_t payload_len = this->frame_buffer_[3] | (this->frame_buffer_[4] << 8);
     uint8_t received_checksum = this->frame_buffer_[5];
     size_t frame_len = 6 + payload_len;
+
+    // Validate payload length
+    if (payload_len > MAX_PAYLOAD_SIZE) {
+      ESP_LOGW(TAG, "Invalid payload length: %d (max %zu), discarding frame", payload_len, MAX_PAYLOAD_SIZE);
+      this->frame_buffer_.erase(this->frame_buffer_.begin(), this->frame_buffer_.begin() + 1);
+      continue;
+    }
 
     // Wait for complete frame
     if (this->frame_buffer_.size() < frame_len)
