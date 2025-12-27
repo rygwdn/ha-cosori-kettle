@@ -353,14 +353,27 @@ void CosoriKettleBLE::process_frame_buffer_() {
       break;
 
     // Parse header
+    uint8_t magic = this->frame_buffer_[0];
     uint8_t frame_type = this->frame_buffer_[1];
     uint8_t seq = this->frame_buffer_[2];
     uint16_t payload_len = this->frame_buffer_[3] | (this->frame_buffer_[4] << 8);
+    uint8_t received_checksum = this->frame_buffer_[5];
     size_t frame_len = 6 + payload_len;
 
     // Wait for complete frame
     if (this->frame_buffer_.size() < frame_len)
       break;
+
+    // Validate checksum
+    uint8_t calculated_checksum = (magic + frame_type + seq + 
+                                   this->frame_buffer_[3] + this->frame_buffer_[4]) & 0xFF;
+    if (received_checksum != calculated_checksum) {
+      ESP_LOGW(TAG, "Checksum mismatch: received=0x%02x, calculated=0x%02x, discarding frame",
+               received_checksum, calculated_checksum);
+      // Discard this frame start and continue searching
+      this->frame_buffer_.erase(this->frame_buffer_.begin(), this->frame_buffer_.begin() + 1);
+      continue;
+    }
 
     // Extract payload
     const uint8_t *payload = this->frame_buffer_.data() + 6;
