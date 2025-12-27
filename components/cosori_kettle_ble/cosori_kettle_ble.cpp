@@ -254,6 +254,11 @@ void CosoriKettleBLE::send_registration_() {
 }
 
 void CosoriKettleBLE::send_poll_() {
+  if (!this->is_connected()) {
+    ESP_LOGV(TAG, "Cannot send poll: not connected");
+    return;
+  }
+  
   uint8_t seq = this->next_tx_seq_();
   auto pkt = this->make_poll_(seq);
   ESP_LOGV(TAG, "Sending POLL (seq=%02x)", seq);
@@ -261,6 +266,11 @@ void CosoriKettleBLE::send_poll_() {
 }
 
 void CosoriKettleBLE::send_hello5_() {
+  if (!this->is_connected()) {
+    ESP_LOGW(TAG, "Cannot send HELLO5: not connected");
+    return;
+  }
+  
   uint8_t seq = this->next_tx_seq_();
   auto pkt = this->make_hello5_(seq);
   ESP_LOGD(TAG, "Sending HELLO5 (seq=%02x)", seq);
@@ -268,6 +278,11 @@ void CosoriKettleBLE::send_hello5_() {
 }
 
 void CosoriKettleBLE::send_setpoint_(uint8_t mode, uint8_t temp_f) {
+  if (!this->is_connected()) {
+    ESP_LOGW(TAG, "Cannot send setpoint: not connected");
+    return;
+  }
+  
   uint8_t seq = this->next_tx_seq_();
   auto pkt = this->make_setpoint_(seq, mode, temp_f);
   ESP_LOGD(TAG, "Sending SETPOINT %d°F (seq=%02x, mode=%02x)", temp_f, seq, mode);
@@ -275,6 +290,11 @@ void CosoriKettleBLE::send_setpoint_(uint8_t mode, uint8_t temp_f) {
 }
 
 void CosoriKettleBLE::send_f4_() {
+  if (!this->is_connected()) {
+    ESP_LOGW(TAG, "Cannot send F4: not connected");
+    return;
+  }
+  
   uint8_t seq = this->next_tx_seq_();
   auto pkt = this->make_f4_(seq);
   ESP_LOGD(TAG, "Sending F4 (seq=%02x)", seq);
@@ -282,6 +302,11 @@ void CosoriKettleBLE::send_f4_() {
 }
 
 void CosoriKettleBLE::send_ctrl_(uint8_t seq_base) {
+  if (!this->is_connected()) {
+    ESP_LOGW(TAG, "Cannot send CTRL: not connected");
+    return;
+  }
+  
   auto pkt = this->make_ctrl_(seq_base);
   ESP_LOGD(TAG, "Sending CTRL (seq=%02x)", seq_base);
   this->send_packet_(pkt.data(), pkt.size());
@@ -525,6 +550,11 @@ void CosoriKettleBLE::set_target_setpoint(float temp_f) {
 
   this->target_setpoint_f_ = temp_f;
   ESP_LOGI(TAG, "Target setpoint changed to %.0f°F", temp_f);
+  
+  // Update number entity if it exists
+  if (this->target_setpoint_number_ != nullptr) {
+    this->target_setpoint_number_->publish_state(temp_f);
+  }
 }
 
 void CosoriKettleBLE::start_heating() {
