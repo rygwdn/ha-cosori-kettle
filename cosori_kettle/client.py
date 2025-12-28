@@ -1,0 +1,321 @@
+"""BLE client wrapper for Cosori Kettle."""
+
+import asyncio
+import logging
+from typing import Optional, Callable
+from bleak import BleakClient, BleakScanner, BLEDevice
+from bleak.backends.characteristic import BleakGATTCharacteristic
+
+from .protocol import PacketParser, PacketBuilder, StatusPacket
+from .state import StateManager
+from .command_fsm import CommandStateMachine
+
+logger = logging.getLogger(__name__)
+
+# BLE UUIDs
+COSORI_SERVICE_UUID = "0000fff0-0000-1000-8000-00805f9b34fb"
+COSORI_RX_CHAR_UUID = "0000fff1-0000-1000-8000-00805f9b34fb"
+COSORI_TX_CHAR_UUID = "0000fff2-0000-1000-8000-00805f9b34fb"
+
+# Device information service
+DEVICE_INFO_SERVICE_UUID = "0000180a-0000-1000-8000-00805f9b34fb"
+HARDWARE_REV_CHAR_UUID = "00002a27-0000-1000-8000-00805f9b34fb"
+SOFTWARE_REV_CHAR_UUID = "00002a28-0000-1000-8000-00805f9b34fb"
+
+
+class CosoriKettleClient:
+    """BLE client for Cosori Kettle."""
+    
+    def __init__(self, on_state_change: Optional[Callable[[dict], None]] = None):
+        self.client: Optional[BleakClient] = None
+        self.device: Optional[BLEDevice] = None
+        self.rx_char: Optional[BleakGATTCharacteristic] = None
+        self.tx_char: Optional[BleakGATTCharacteristic] = None
+        
+        self.parser = PacketParser()
+        self.state_manager = StateManager(on_state_change)
+        
+        # Will be initialized after reading device info
+        self.command_fsm: Optional[CommandStateMachine] = None
+        
+        # self._poll_task: Optional[asyncio.Task] = None
+        self._fsm_task: Optional[asyncio.Task] = None
+        self._running = False
+        self._registration_complete = False
+        
+        # Device version info
+        self.hardware_version: Optional[str] = None
+        self.software_version: Optional[str] = None
+    
+    async def scan(self, name_filter: str = "Cosori") -> list[BLEDevice]:
+        """Scan for Cosori kettles."""
+        logger.info("Scanning for Cosori kettles...")
+        devices = await BleakScanner.discover(timeout=5.0)
+        filtered = [
+            d for d in devices
+            if d.name and name_filter.lower() in d.name.lower()
+        ]
+        return filtered
+    
+    async def find_device(self, name: str = "Cosori Gooseneck Kettle") -> Optional[BLEDevice]:
+        """Find device by name."""
+        device = await BleakScanner.find_device_by_name(name, cb={"use_bdaddr": True})
+        return device
+    
+    async def connect(self, device: BLEDevice) -> bool:
+        """Connect to kettle."""
+        try:
+            self.device = device
+            self.client = BleakClient(device, disconnected_callback=self._on_disconnect)
+            
+            logger.info(f"Connecting to {device.name} ({device.address})...")
+            await self.client.connect()
+            
+            # Services are automatically discovered on connection in newer bleak versions
+            # Access them directly via client.services
+            
+            # Get characteristics
+            service = self.client.services.get_service(COSORI_SERVICE_UUID)
+            if not service:
+                logger.error("Service not found")
+                return False
+            
+            self.rx_char = service.get_characteristic(COSORI_RX_CHAR_UUID)
+            self.tx_char = service.get_characteristic(COSORI_TX_CHAR_UUID)
+            
+            if not self.rx_char or not self.tx_char:
+                logger.error("Characteristics not found")
+                return False
+            
+            # Read device version information
+            await self._read_device_info()
+            
+            # Subscribe to notifications
+            await self.client.start_notify(self.rx_char, self._notification_handler)
+            
+            logger.info("Connected and subscribed to notifications")
+            self.state_manager.set_connected(True)
+            
+            
+            # Start registration handshake (will use version-specific hello packet)
+            self.command_fsm.start_registration()
+
+            # Start background tasks
+            self._running = True
+            # self._poll_task = asyncio.create_task(self._poll_loop())
+            self._fsm_task = asyncio.create_task(self._fsm_loop())
+            self._registration_complete = False
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Connection failed: {e}")
+            self.state_manager.set_connected(False)
+            return False
+    
+    async def disconnect(self) -> None:
+        """Disconnect from kettle."""
+        self._running = False
+        
+        # if self._poll_task:
+        #     self._poll_task.cancel()
+        #     try:
+        #         await self._poll_task
+        #     except asyncio.CancelledError:
+        #         pass
+        
+        if self._fsm_task:
+            self._fsm_task.cancel()
+            try:
+                await self._fsm_task
+            except asyncio.CancelledError:
+                pass
+        
+        if self.client and self.client.is_connected:
+            await self.client.disconnect()
+        
+        self.state_manager.set_connected(False)
+        logger.info("Disconnected")
+    
+    def _on_disconnect(self, client: BleakClient) -> None:
+        """Handle disconnection."""
+        logger.warning("Device disconnected")
+        self.state_manager.set_connected(False)
+        self._registration_complete = False
+    
+    async def _read_device_info(self) -> None:
+        """Read hardware and software version from device info service."""
+        use_scan_hello = False
+        
+        try:
+            # Get device info service
+            info_service = self.client.services.get_service(DEVICE_INFO_SERVICE_UUID)
+            if not info_service:
+                logger.warning("Device info service not found")
+            else:
+                # Read hardware revision
+                hw_char = info_service.get_characteristic(HARDWARE_REV_CHAR_UUID)
+                if hw_char:
+                    hw_bytes = await self.client.read_gatt_char(hw_char)
+                    self.hardware_version = hw_bytes.decode('utf-8', errors='ignore')
+                    logger.info(f"Hardware version: {self.hardware_version}")
+                
+                # Read software revision
+                sw_char = info_service.get_characteristic(SOFTWARE_REV_CHAR_UUID)
+                if sw_char:
+                    sw_bytes = await self.client.read_gatt_char(sw_char)
+                    self.software_version = sw_bytes.decode('utf-8', errors='ignore')
+                    logger.info(f"Software version: {self.software_version}")
+                
+                # Determine which hello packet to use
+                if self.hardware_version == '1.0.00' and self.software_version == 'R0007V0012':
+                    logger.info("Using scan.py hello payload for version 1.0.00/R0007V0012")
+                    use_scan_hello = True
+                else:
+                    logger.info("Using default C++ hello payload")
+                
+        except Exception as e:
+            logger.warning(f"Failed to read device info: {e}")
+        
+        # Initialize command FSM with the appropriate hello version
+        self.command_fsm = CommandStateMachine(
+            send_packet_callback=self._send_packet_internal,
+            get_seq_callback=self.state_manager.next_tx_seq,
+            get_status_seq_callback=lambda: self.state_manager.last_status_seq,
+            use_scan_hello=use_scan_hello
+        )
+    
+    def _notification_handler(self, char: BleakGATTCharacteristic, data: bytearray) -> None:
+        """Handle BLE notification."""
+        # Log received data
+        hex_str = ":".join(f"{b:02x}" for b in data)
+        logger.info(f"RX: {hex_str}")
+        
+        # Append to parser buffer
+        self.parser.append_data(bytes(data))
+        
+        # Process frames (parser handles multi-packet messages using length field)
+        packets = self.parser.process_frames()
+        for packet in packets:
+            if isinstance(packet, StatusPacket) and packet.packet_type == "extended":
+                # Registration complete when we receive extended status
+                if not self._registration_complete:
+                    self._registration_complete = True
+                    logger.info("Registration handshake complete")
+            
+            # Update state
+            self.state_manager.update_from_packet(packet)
+    
+    def _send_packet_internal(self, packet: bytes) -> None:
+        """Internal packet sender (called by FSM)."""
+        if not self.tx_char or not self.client or not self.client.is_connected:
+            logger.warning("Cannot send packet: not connected")
+            return
+        
+        
+        # Send packet (may span multiple BLE writes if large)
+        asyncio.create_task(self._send_packet_split(packet))
+    
+    async def _send_packet_split(self, packet: bytes) -> None:
+        """Send packet, splitting into chunks if needed (like uart_example.py)."""
+        if not self.tx_char or not self.client or not self.client.is_connected:
+            return
+        
+        max_size = 20 #self.tx_char.max_write_without_response_size
+        if len(packet) <= max_size:
+            # Log sent packet
+            hex_str = ":".join(f"{b:02x}" for b in packet)
+            logger.info(f"TX: {hex_str} (single write, <{max_size} bytes)")
+            # Single write
+            await self.client.write_gatt_char(self.tx_char, packet, response=False)
+        else:
+            # Split into chunks (like uart_example.py sliced function)
+            for i in range(0, len(packet), max_size):
+                chunk = packet[i:i + max_size]
+                # Log sent packet
+                hex_str = ":".join(f"{b:02x}" for b in chunk)
+                logger.info(f"TX: {hex_str} (chunk {i//max_size + 1} of {len(packet)//max_size})")
+                await self.client.write_gatt_char(self.tx_char, chunk, response=False)
+    
+    async def send_packet(self, packet: bytes) -> None:
+        """Send packet manually."""
+        if not self.tx_char or not self.client or not self.client.is_connected:
+            raise RuntimeError("Not connected")
+        await self._send_packet_split(packet)
+    
+    async def poll(self) -> None:
+        """Send poll command."""
+        if not self.is_connected():
+            return
+        seq = self.state_manager.next_tx_seq()
+        poll_pkt = PacketBuilder.make_poll(seq)
+        await self.send_packet(poll_pkt)
+    
+    async def set_target_temperature(self, temp_f: float) -> None:
+        """Set target temperature."""
+        from .protocol import MIN_TEMP_F, MAX_TEMP_F, MODE_BOIL, MODE_HEAT
+        
+        # Clamp to valid range
+        temp_f = max(MIN_TEMP_F, min(MAX_TEMP_F, temp_f))
+        temp_f_int = int(round(temp_f))
+        
+        self.state_manager.state.target_setpoint_f = temp_f
+        
+        mode = MODE_BOIL if temp_f_int == MAX_TEMP_F else MODE_HEAT
+        
+        logger.info(f"Setting target temperature to {temp_f_int}°F (mode={mode:02x})")
+        self.command_fsm.start_heating(mode, temp_f_int)
+    
+    async def start_heating(self) -> None:
+        """Start heating to target temperature."""
+        temp_f = self.state_manager.state.target_setpoint_f
+        await self.set_target_temperature(temp_f)
+    
+    async def stop_heating(self) -> None:
+        """Stop heating."""
+        logger.info("Stopping heating")
+        self.command_fsm.start_stop()
+    
+    # async def _poll_loop(self) -> None:
+    #     """Background polling loop."""
+    #     while self._running:
+    #         try:
+    #             if self.is_connected() and self._registration_complete:
+    #                 await self.poll()
+    #             await asyncio.sleep(2.0)  # Poll every 2 seconds
+    #         except asyncio.CancelledError:
+    #             break
+    #         except Exception as e:
+    #             logger.error(f"Poll error: {e}")
+    #             await asyncio.sleep(2.0)
+    
+    async def _fsm_loop(self) -> None:
+        """Background FSM processing loop."""
+        while self._running:
+            try:
+                if self.command_fsm:
+                    self.command_fsm.process()
+                await asyncio.sleep(0.01)  # 10ms loop
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"FSM error: {e}")
+                await asyncio.sleep(0.01)
+    
+    def is_connected(self) -> bool:
+        """Check if connected."""
+        return (
+            self.client is not None
+            and self.client.is_connected
+            and self.state_manager.state.connected
+        )
+    
+    @property
+    def state(self):
+        """Get current state."""
+        return self.state_manager.state
+    
+    @property
+    def registration_complete(self) -> bool:
+        """Check if registration is complete."""
+        return self._registration_complete
