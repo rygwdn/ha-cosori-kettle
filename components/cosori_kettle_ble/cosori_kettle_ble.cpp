@@ -1,5 +1,6 @@
 #include "cosori_kettle_ble.h"
 #include "envelope.h"
+#include "protocol.h"
 #include "esphome/core/log.h"
 #include "esphome/core/application.h"
 #include <cmath>
@@ -22,15 +23,7 @@ static constexpr size_t MAX_PAYLOAD_SIZE = 256;
 
 // Protocol constants are now defined in envelope.h
 
-// Temperature limits (Fahrenheit)
-static constexpr uint8_t MIN_TEMP_F = 104;
-static constexpr uint8_t MAX_TEMP_F = 212;
-static constexpr uint8_t MIN_VALID_READING_F = 40;
-static constexpr uint8_t MAX_VALID_READING_F = 230;
-
-// Operating modes
-static constexpr uint8_t MODE_BOIL = 0x04;
-static constexpr uint8_t MODE_HEAT = 0x06;
+// Temperature limits and operating modes are now defined in protocol.h
 
 // Timing constants (milliseconds)
 static constexpr uint32_t HANDSHAKE_TIMEOUT_MS = 1000;
@@ -257,9 +250,14 @@ void CosoriKettleBLE::send_status_request_() {
   }
   
   uint8_t seq = this->next_tx_seq_();
-  uint8_t payload[] = {this->protocol_version_, 0x40, 0x40, 0x00};
+  uint8_t payload[4];
+  size_t payload_len = build_status_request_payload(this->protocol_version_, payload);
+  if (payload_len == 0) {
+    ESP_LOGW(TAG, "Failed to build POLL payload");
+    return;
+  }
   ESP_LOGV(TAG, "Sending POLL (seq=%02x)", seq);
-  if (!this->send_command(seq, payload, sizeof(payload))) {
+  if (!this->send_command(seq, payload, payload_len)) {
     ESP_LOGW(TAG, "Failed to send POLL");
   }
 }
@@ -270,17 +268,15 @@ void CosoriKettleBLE::send_set_my_temp(uint8_t temp_f) {
     return;
   }
   
-  // Clamp to valid range
-  if (temp_f < MIN_TEMP_F)
-    temp_f = MIN_TEMP_F;
-  if (temp_f > MAX_TEMP_F)
-    temp_f = MAX_TEMP_F;
-  
   uint8_t seq = this->next_tx_seq_();
-  // Command: 01F3A300 + temperature (1 byte)
-  uint8_t payload[] = {this->protocol_version_, 0xF3, 0xA3, 0x00, temp_f};
+  uint8_t payload[5];
+  size_t payload_len = build_set_my_temp_payload(this->protocol_version_, temp_f, payload);
+  if (payload_len == 0) {
+    ESP_LOGW(TAG, "Failed to build set my temp payload");
+    return;
+  }
   ESP_LOGD(TAG, "Sending set my temp %d°F (seq=%02x)", temp_f, seq);
-  if (!this->send_command(seq, payload, sizeof(payload))) {
+  if (!this->send_command(seq, payload, payload_len)) {
     ESP_LOGW(TAG, "Failed to send set my temp");
   }
 }
@@ -292,10 +288,14 @@ void CosoriKettleBLE::send_set_baby_formula(bool enabled) {
   }
   
   uint8_t seq = this->next_tx_seq_();
-  // Command: 01F5A300 + enabled (1 byte: 0x01=enabled, 0x00=disabled)
-  uint8_t payload[] = {this->protocol_version_, 0xF5, 0xA3, 0x00, static_cast<uint8_t>(enabled ? 0x01 : 0x00)};
+  uint8_t payload[5];
+  size_t payload_len = build_set_baby_formula_payload(this->protocol_version_, enabled, payload);
+  if (payload_len == 0) {
+    ESP_LOGW(TAG, "Failed to build set baby formula payload");
+    return;
+  }
   ESP_LOGD(TAG, "Sending set baby formula %s (seq=%02x)", enabled ? "enabled" : "disabled", seq);
-  if (!this->send_command(seq, payload, sizeof(payload))) {
+  if (!this->send_command(seq, payload, payload_len)) {
     ESP_LOGW(TAG, "Failed to send set baby formula");
   }
 }
@@ -307,15 +307,14 @@ void CosoriKettleBLE::send_set_hold_time(uint16_t seconds) {
   }
   
   uint8_t seq = this->next_tx_seq_();
-  // Command: 01F2A300 + hold_time (2 bytes big-endian)
-  uint8_t payload[] = {
-    this->protocol_version_, 0xF2, 0xA3, 0x00,
-    0x00, static_cast<uint8_t>((seconds > 0) ? 0x01 : 0x00), // enable hold
-    static_cast<uint8_t>((seconds >> 8) & 0xFF),  // High byte
-    static_cast<uint8_t>(seconds & 0xFF)           // Low byte
-  };
+  uint8_t payload[8];
+  size_t payload_len = build_set_hold_time_payload(this->protocol_version_, seconds, payload);
+  if (payload_len == 0) {
+    ESP_LOGW(TAG, "Failed to build set hold time payload");
+    return;
+  }
   ESP_LOGD(TAG, "Sending set hold time %u seconds (seq=%02x)", seconds, seq);
-  if (!this->send_command(seq, payload, sizeof(payload))) {
+  if (!this->send_command(seq, payload, payload_len)) {
     ESP_LOGW(TAG, "Failed to send set hold time");
   }
 }
@@ -329,18 +328,15 @@ void CosoriKettleBLE::send_set_mode(uint8_t mode, uint8_t temp_f) {
   }
   
   uint8_t seq = this->next_tx_seq_();
-  uint8_t payload[] = {
-    // Command
-    this->protocol_version_, 0xF0, 0xA3, 0x00,
-    // Payload
-    mode, temp_f,
-    // Hold time
-    static_cast<uint8_t>((this->hold_time_seconds_ > 0) ? 0x01 : 0x00), // enable hold
-    static_cast<uint8_t>((this->hold_time_seconds_ >> 8) & 0xFF),  // High byte
-    static_cast<uint8_t>(this->hold_time_seconds_ & 0xFF)           // Low byte
-  };
+  uint8_t payload[9];
+  size_t payload_len = build_set_mode_payload(this->protocol_version_, mode, temp_f,
+                                               this->hold_time_seconds_, payload);
+  if (payload_len == 0) {
+    ESP_LOGW(TAG, "Failed to build set mode payload");
+    return;
+  }
   ESP_LOGD(TAG, "Sending SETPOINT %d°F (seq=%02x, mode=%02x)", temp_f, seq, mode);
-  if (!this->send_command(seq, payload, sizeof(payload))) {
+  if (!this->send_command(seq, payload, payload_len)) {
     ESP_LOGW(TAG, "Failed to send SETPOINT");
   }
 }
@@ -352,9 +348,14 @@ void CosoriKettleBLE::send_stop() {
   }
   
   uint8_t seq = this->next_tx_seq_();
-  uint8_t payload[] = {this->protocol_version_, 0xF4, 0xA3, 0x00};
+  uint8_t payload[4];
+  size_t payload_len = build_stop_payload(this->protocol_version_, payload);
+  if (payload_len == 0) {
+    ESP_LOGW(TAG, "Failed to build stop payload");
+    return;
+  }
   ESP_LOGD(TAG, "Sending F4 (seq=%02x)", seq);
-  if (!this->send_command(seq, payload, sizeof(payload))) {
+  if (!this->send_command(seq, payload, payload_len)) {
     ESP_LOGW(TAG, "Failed to send F4");
   }
 }
@@ -365,9 +366,14 @@ void CosoriKettleBLE::send_request_compact_status_(uint8_t seq_base) {
     return;
   }
   
-  uint8_t payload[] = {this->protocol_version_, 0x41, 0x40, 0x00};
+  uint8_t payload[4];
+  size_t payload_len = build_compact_status_request_payload(this->protocol_version_, payload);
+  if (payload_len == 0) {
+    ESP_LOGW(TAG, "Failed to build compact status request payload");
+    return;
+  }
   ESP_LOGD(TAG, "Sending CTRL (seq=%02x)", seq_base);
-  if (!this->send_command(seq_base, payload, sizeof(payload), true)) {
+  if (!this->send_command(seq_base, payload, payload_len, true)) {
     ESP_LOGW(TAG, "Failed to send CTRL");
   }
 }
@@ -546,10 +552,9 @@ void CosoriKettleBLE::process_frame_buffer_() {
     // Update last RX sequence
     this->last_rx_seq_ = frame.seq;
 
-    // TODO: parse based on frame type AND command
-    if (frame.frame_type == MESSAGE_HEADER_TYPE && frame.payload[1] == 0x41) {
+    if (frame.frame_type == MESSAGE_HEADER_TYPE && frame.payload[1] == CMD_CTRL) {
       this->parse_compact_status_(frame.payload, frame.payload_len);
-    } else if (frame.frame_type == ACK_HEADER_TYPE && frame.payload[1] == 0x40) {
+    } else if (frame.frame_type == ACK_HEADER_TYPE && frame.payload[1] == CMD_POLL) {
       this->parse_status_ack_(frame.payload, frame.payload_len);
     } else if (frame.frame_type == ACK_HEADER_TYPE && !this->waiting_for_ack_complete_ && this->waiting_for_ack_seq_ == frame.seq) {
       this->waiting_for_ack_complete_ = true;
@@ -566,24 +571,15 @@ void CosoriKettleBLE::process_frame_buffer_() {
 }
 
 void CosoriKettleBLE::parse_compact_status_(const uint8_t *payload, size_t len) {
-  // Compact status: 01 41 40 00 <stage> <mode> <sp> <temp> <status> ...
-  if (len < 9 || payload[1] != 0x41)
+  CompactStatus status = parse_compact_status(payload, len);
+  if (!status.valid) {
     return;
-
-  uint8_t stage = payload[4];     // Heating stage
-  uint8_t mode = payload[5];      // Mode
-  uint8_t sp = payload[6];        // Setpoint temperature
-  uint8_t temp = payload[7];      // Current temperature
-  uint8_t status = payload[8];    // Heating status
-
-  // Validate temperature range
-  if (temp < MIN_VALID_READING_F || temp > MAX_VALID_READING_F)
-    return;
+  }
 
   // Update state (temp, setpoint, heating only - no on-base detection from compact packets)
-  this->current_temp_f_ = temp;
-  this->kettle_setpoint_f_ = sp;
-  this->heating_ = (status != 0);
+  this->current_temp_f_ = status.temp;
+  this->kettle_setpoint_f_ = status.setpoint;
+  this->heating_ = (status.status != 0);
   this->status_received_ = true;
   this->last_status_seq_ = this->last_rx_seq_;
 
@@ -595,85 +591,66 @@ void CosoriKettleBLE::parse_compact_status_(const uint8_t *payload, size_t len) 
 }
 
 void CosoriKettleBLE::parse_status_ack_(const uint8_t *payload, size_t len) {
-  // Extended status: 01 40 40 00 <stage> <mode> <sp> <temp> ... <on_base> ...
-  // NOTE: Extended packets (A512 = A5 + 12, len=29) contain on-base detection at payload[14] (byte 20)
-  // Compact packets (A522 = A5 + 22, len=12) do NOT contain on-base information
-  if (len < 8 || payload[1] != 0x40)
+  ExtendedStatus status = parse_extended_status(payload, len);
+  if (!status.valid) {
     return;
-
-  uint8_t stage = payload[4];
-  uint8_t mode = payload[5];
-  uint8_t sp = payload[6];
-  uint8_t temp = payload[7];
-
-  // Validate temperature range
-  if (temp < MIN_VALID_READING_F || temp > MAX_VALID_READING_F)
-    return;
+  }
 
   // Update state (temp, setpoint, heating)
-  this->current_temp_f_ = temp;
-  this->kettle_setpoint_f_ = sp;
-  this->heating_ = (stage != 0);
+  this->current_temp_f_ = status.temp;
+  this->kettle_setpoint_f_ = status.setpoint;
+  this->heating_ = (status.stage != 0);
   this->status_received_ = true;
   this->last_status_seq_ = this->last_rx_seq_;
 
-  // On-base detection from payload[14] (byte 20 in full packet)
-  if (len >= 15) {
-    uint8_t on_base_byte = payload[14];
+  // On-base detection
+  if (status.has_on_base) {
     bool prev_on_base = this->on_base_;
-    this->on_base_ = (on_base_byte == 0x00);  // 0x00=on-base, 0x01=off-base
-
+    this->on_base_ = status.on_base;
     if (prev_on_base != this->on_base_) {
-      ESP_LOGI(TAG, "On-base: %s (payload[14]=0x%02x)",
-               this->on_base_ ? "ON" : "OFF", on_base_byte);
+      ESP_LOGI(TAG, "On-base: %s", this->on_base_ ? "ON" : "OFF");
     }
   }
 
-  // My temp from payload[8] (body[4] after command header)
-  if (len >= 9) {
-    uint8_t mytemp = payload[8];
-    if (mytemp >= MIN_TEMP_F && mytemp <= MAX_TEMP_F) {
-      if (this->pending_my_temp_) {
-        // Clear pending flag - device has processed our command
-        // Update value now that device has confirmed
-        this->pending_my_temp_ = false;
-        this->my_temp_f_ = mytemp;
-        ESP_LOGD(TAG, "My temp update confirmed: %d°F", mytemp);
-      } else {
-        // Not pending, safe to update from device
-        this->my_temp_f_ = mytemp;
-      }
+  // My temp
+  if (status.has_my_temp) {
+    if (this->pending_my_temp_) {
+      // Clear pending flag - device has processed our command
+      // Update value now that device has confirmed
+      this->pending_my_temp_ = false;
+      this->my_temp_f_ = status.my_temp;
+      ESP_LOGD(TAG, "My temp update confirmed: %d°F", status.my_temp);
+    } else {
+      // Not pending, safe to update from device
+      this->my_temp_f_ = status.my_temp;
     }
   }
 
-  // Hold time from payload[15-16] (big-endian, body[11-12] after command header)
-  if (len >= 17) {
-    uint16_t hold_time = (static_cast<uint16_t>(payload[15]) << 8) | payload[16];
+  // Hold time
+  if (status.has_hold_time) {
     if (this->pending_hold_time_) {
       // Clear pending flag - device has processed our command
       // Update value now that device has confirmed
       this->pending_hold_time_ = false;
-      this->hold_time_seconds_ = hold_time;
-      ESP_LOGD(TAG, "Hold time update confirmed: %u seconds", hold_time);
+      this->hold_time_seconds_ = status.hold_time;
+      ESP_LOGD(TAG, "Hold time update confirmed: %u seconds", status.hold_time);
     } else {
       // Not pending, safe to update from device
-      this->hold_time_seconds_ = hold_time;
+      this->hold_time_seconds_ = status.hold_time;
     }
   }
 
-  // Baby formula mode from payload[28] (body[24] after command header)
-  if (len >= 29) {
-    uint8_t baby_mode = payload[28];
-    bool baby_enabled = (baby_mode == 0x01);
+  // Baby formula mode
+  if (status.has_baby_formula) {
     if (this->pending_baby_formula_) {
       // Clear pending flag - device has processed our command
       // Update value now that device has confirmed
       this->pending_baby_formula_ = false;
-      this->baby_formula_enabled_ = baby_enabled;
-      ESP_LOGD(TAG, "Baby formula update confirmed: %s", baby_enabled ? "enabled" : "disabled");
+      this->baby_formula_enabled_ = status.baby_formula_enabled;
+      ESP_LOGD(TAG, "Baby formula update confirmed: %s", status.baby_formula_enabled ? "enabled" : "disabled");
     } else {
       // Not pending, safe to update from device
-      this->baby_formula_enabled_ = baby_enabled;
+      this->baby_formula_enabled_ = status.baby_formula_enabled;
     }
   }
 
@@ -1048,22 +1025,18 @@ void CosoriKettleBLE::process_command_state_machine_() {
 
     case CommandState::HANDSHAKE_START: {
       uint8_t payload[36];
-      payload[0] = this->protocol_version_; // Protocol version (0 or 1)
-      payload[1] = 0x81;
-      payload[2] = 0xD1;
-      payload[3] = 0x00;
-      
-      // Convert 16-byte binary key to 32-byte ASCII hex
-      static const char hex_chars[] = "0123456789abcdef";
-      for (size_t i = 0; i < 16; i++) {
-        uint8_t byte = this->registration_key_[i];
-        payload[4 + i * 2] = hex_chars[(byte >> 4) & 0x0F];
-        payload[4 + i * 2 + 1] = hex_chars[byte & 0x0F];
+      size_t payload_len = build_hello_payload(this->protocol_version_, 
+                                                 this->registration_key_,
+                                                 payload);
+      if (payload_len == 0) {
+        ESP_LOGW(TAG, "Failed to build hello payload");
+        this->command_state_ = CommandState::IDLE;
+        break;
       }
       
       // Send hello command using send_command (seq=0 for hello)
       const uint8_t sequence_number = 0;
-      if (!this->send_command(sequence_number, payload, sizeof(payload))) {
+      if (!this->send_command(sequence_number, payload, payload_len)) {
         ESP_LOGW(TAG, "Failed to send hello command");
         this->command_state_ = CommandState::IDLE;
         break;
