@@ -6,6 +6,11 @@
 namespace esphome {
 namespace cosori_kettle_ble {
 
+// Protocol constants
+static constexpr uint8_t FRAME_MAGIC = 0xA5;           // Magic packet header (A5)
+static constexpr uint8_t MESSAGE_HEADER_TYPE = 0x22;  // Message header type (A522 = A5 + 22)
+static constexpr uint8_t ACK_HEADER_TYPE = 0x12;       // ACK header type (A512 = A5 + 12)
+
 // BLE characteristic write limit
 static constexpr size_t BLE_CHUNK_SIZE = 20;
 // Buffer size for envelope (must match MAX_FRAME_BUFFER_SIZE in cosori_kettle_ble.cpp)
@@ -69,7 +74,7 @@ class Envelope {
 
     size_ = 0;
     pos_ = 0;
-    buffer_[size_++] = 0xA5;  // FRAME_MAGIC
+    buffer_[size_++] = FRAME_MAGIC;
     buffer_[size_++] = frame_type;
     buffer_[size_++] = seq;
     buffer_[size_++] = payload_len & 0xFF;           // len_lo
@@ -84,6 +89,16 @@ class Envelope {
     }
 
     return true;
+  }
+
+  // Build a message packet (A522 = A5 + 22) into this buffer
+  bool build_message(uint8_t seq, const uint8_t *payload, size_t payload_len) {
+    return build(MESSAGE_HEADER_TYPE, seq, payload, payload_len);
+  }
+
+  // Build an ACK packet (A512 = A5 + 12) into this buffer
+  bool build_ack(uint8_t seq, const uint8_t *payload, size_t payload_len) {
+    return build(ACK_HEADER_TYPE, seq, payload, payload_len);
   }
 
   // Get chunk data at current position (for BLE transmission)
@@ -204,7 +219,7 @@ class Envelope {
   // Find next frame start (FRAME_MAGIC) from current position
   size_t find_frame_start() const {
     for (size_t i = pos_; i < size_; i++) {
-      if (buffer_[i] == 0xA5) {  // FRAME_MAGIC
+      if (buffer_[i] == FRAME_MAGIC) {
         return i;
       }
     }
@@ -219,7 +234,7 @@ class Envelope {
       return false;  // Not enough data for header
     }
     
-    if (buffer_[pos_] != 0xA5) {  // FRAME_MAGIC
+    if (buffer_[pos_] != FRAME_MAGIC) {
       return false;
     }
     

@@ -20,12 +20,7 @@ Envelope CosoriKettleBLE::recv_buffer;
 static constexpr size_t MAX_FRAME_BUFFER_SIZE = 512;
 static constexpr size_t MAX_PAYLOAD_SIZE = 256;
 
-// Protocol constants
-static constexpr uint8_t FRAME_MAGIC = 0xA5;
-static constexpr uint8_t FRAME_TYPE_COMPACT_STATUS = 0x22;
-static constexpr uint8_t FRAME_TYPE_EXTENDED_STATUS = 0x12;
-static constexpr uint8_t FRAME_TYPE_COMMAND_A5_22 = 0x22;
-static constexpr uint8_t FRAME_TYPE_COMMAND_A5_12 = 0x12;
+// Protocol constants are now defined in envelope.h
 
 // Temperature limits (Fahrenheit)
 static constexpr uint8_t MIN_TEMP_F = 104;
@@ -440,54 +435,50 @@ void CosoriKettleBLE::send_next_chunk_() {
 // Packet Builders
 // ============================================================================
 
-std::vector<uint8_t> CosoriKettleBLE::build_a5_22_(uint8_t seq, const uint8_t *payload, size_t payload_len,
-                                                    uint8_t checksum) {
-  // Use send_buffer to build packet
-  if (!send_buffer.build(FRAME_TYPE_COMMAND_A5_22, seq, payload, payload_len)) {
-    ESP_LOGW(TAG, "Failed to build A5_22 packet");
-    return std::vector<uint8_t>();
-  }
-  return std::vector<uint8_t>(send_buffer.data(), send_buffer.data() + send_buffer.size());
-}
-
-std::vector<uint8_t> CosoriKettleBLE::build_a5_12_(uint8_t seq, const uint8_t *payload, size_t payload_len,
-                                                    uint8_t checksum) {
-  // Use send_buffer to build packet
-  if (!send_buffer.build(FRAME_TYPE_COMMAND_A5_12, seq, payload, payload_len)) {
-    ESP_LOGW(TAG, "Failed to build A5_12 packet");
-    return std::vector<uint8_t>();
-  }
-  return std::vector<uint8_t>(send_buffer.data(), send_buffer.data() + send_buffer.size());
-}
 
 std::vector<uint8_t> CosoriKettleBLE::make_poll_(uint8_t seq) {
   const uint8_t payload[] = {0x00, 0x40, 0x40, 0x00};
-  uint8_t checksum = (0xB4 - seq) & 0xFF;
-  return this->build_a5_22_(seq, payload, sizeof(payload), checksum);
+  if (!send_buffer.build_message(seq, payload, sizeof(payload))) {
+    ESP_LOGW(TAG, "Failed to build message packet (A522)");
+    return std::vector<uint8_t>();
+  }
+  return std::vector<uint8_t>(send_buffer.data(), send_buffer.data() + send_buffer.size());
 }
 
 std::vector<uint8_t> CosoriKettleBLE::make_hello5_(uint8_t seq) {
   const uint8_t payload[] = {0x00, 0xF2, 0xA3, 0x00, 0x00, 0x01, 0x10, 0x0E};
-  uint8_t checksum = (0x7C - seq) & 0xFF;
-  return this->build_a5_22_(seq, payload, sizeof(payload), checksum);
+  if (!send_buffer.build_message(seq, payload, sizeof(payload))) {
+    ESP_LOGW(TAG, "Failed to build message packet (A522)");
+    return std::vector<uint8_t>();
+  }
+  return std::vector<uint8_t>(send_buffer.data(), send_buffer.data() + send_buffer.size());
 }
 
 std::vector<uint8_t> CosoriKettleBLE::make_setpoint_(uint8_t seq, uint8_t mode, uint8_t temp_f) {
   const uint8_t payload[] = {0x00, 0xF0, 0xA3, 0x00, mode, temp_f, 0x01, 0x10, 0x0E};
-  uint8_t checksum = (0x7D - seq - mode - temp_f) & 0xFF;
-  return this->build_a5_22_(seq, payload, sizeof(payload), checksum);
+  if (!send_buffer.build_message(seq, payload, sizeof(payload))) {
+    ESP_LOGW(TAG, "Failed to build message packet (A522)");
+    return std::vector<uint8_t>();
+  }
+  return std::vector<uint8_t>(send_buffer.data(), send_buffer.data() + send_buffer.size());
 }
 
 std::vector<uint8_t> CosoriKettleBLE::make_f4_(uint8_t seq) {
   const uint8_t payload[] = {0x00, 0xF4, 0xA3, 0x00};
-  uint8_t checksum = (0x9D - seq) & 0xFF;
-  return this->build_a5_22_(seq, payload, sizeof(payload), checksum);
+  if (!send_buffer.build_message(seq, payload, sizeof(payload))) {
+    ESP_LOGW(TAG, "Failed to build message packet (A522)");
+    return std::vector<uint8_t>();
+  }
+  return std::vector<uint8_t>(send_buffer.data(), send_buffer.data() + send_buffer.size());
 }
 
 std::vector<uint8_t> CosoriKettleBLE::make_ctrl_(uint8_t seq) {
-  uint8_t checksum = (0xC3 - seq) & 0xFF;
   const uint8_t payload[] = {0x00, 0x41, 0x40, 0x00};
-  return this->build_a5_12_(seq, payload, sizeof(payload), checksum);
+  if (!send_buffer.build_ack(seq, payload, sizeof(payload))) {
+    ESP_LOGW(TAG, "Failed to build ACK packet (A512)");
+    return std::vector<uint8_t>();
+  }
+  return std::vector<uint8_t>(send_buffer.data(), send_buffer.data() + send_buffer.size());
 }
 
 // ============================================================================
@@ -509,11 +500,11 @@ void CosoriKettleBLE::process_frame_buffer_() {
 
     // TODO: parse based on frame type AND command
     // Parse based on frame type
-    if (frame.frame_type == FRAME_TYPE_COMPACT_STATUS) {
-      // Compact status (A5 22)
+    if (frame.frame_type == MESSAGE_HEADER_TYPE) {
+      // Message header (A522 = A5 + 22) - compact status
       this->parse_compact_status_(frame.payload, frame.payload_len);
-    } else if (frame.frame_type == FRAME_TYPE_EXTENDED_STATUS) {
-      // Extended status (A5 12)
+    } else if (frame.frame_type == ACK_HEADER_TYPE) {
+      // ACK header (A512 = A5 + 12) - extended status
       this->parse_extended_status_(frame.payload, frame.payload_len);
     }
   }
@@ -553,8 +544,8 @@ void CosoriKettleBLE::parse_compact_status_(const uint8_t *payload, size_t len) 
 
 void CosoriKettleBLE::parse_extended_status_(const uint8_t *payload, size_t len) {
   // Extended status: 01 40 40 00 <stage> <mode> <sp> <temp> ... <on_base> ...
-  // NOTE: Extended packets (A5 12, len=29) contain on-base detection at payload[14] (byte 20)
-  // Compact packets (A5 22, len=12) do NOT contain on-base information
+  // NOTE: Extended packets (A512 = A5 + 12, len=29) contain on-base detection at payload[14] (byte 20)
+  // Compact packets (A522 = A5 + 22, len=12) do NOT contain on-base information
   if (len < 8 || payload[0] != 0x01 || payload[1] != 0x40)
     return;
 

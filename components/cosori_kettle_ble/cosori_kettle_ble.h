@@ -138,9 +138,6 @@ class CosoriKettleBLE : public esphome::ble_client::BLEClientNode, public Pollin
   void send_packet_(const uint8_t *data, size_t len);
   void send_next_chunk_();
 
-  // Packet builders
-  std::vector<uint8_t> build_a5_22_(uint8_t seq, const uint8_t *payload, size_t payload_len, uint8_t checksum);
-  std::vector<uint8_t> build_a5_12_(uint8_t seq, const uint8_t *payload, size_t payload_len, uint8_t checksum);
   std::vector<uint8_t> make_poll_(uint8_t seq);
   std::vector<uint8_t> make_hello5_(uint8_t seq);
   std::vector<uint8_t> make_setpoint_(uint8_t seq, uint8_t mode, uint8_t temp_f);
