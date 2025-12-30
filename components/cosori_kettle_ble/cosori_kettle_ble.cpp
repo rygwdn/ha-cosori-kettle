@@ -69,6 +69,7 @@ void CosoriKettleBLE::setup() {
   this->current_temperature = (this->current_temp_f_ - 32.0f) * 5.0f / 9.0f;
 }
 
+
 void CosoriKettleBLE::dump_config() {
   ESP_LOGCONFIG(TAG, "Cosori Kettle BLE:");
   ESP_LOGCONFIG(TAG, "  MAC Address: %s", this->parent_->address_str());
@@ -79,8 +80,11 @@ void CosoriKettleBLE::dump_config() {
   LOG_SENSOR("  ", "Temperature", this->temperature_sensor_);
   LOG_SENSOR("  ", "Kettle Setpoint", this->kettle_setpoint_sensor_);
   LOG_NUMBER("  ", "Target Setpoint", this->target_setpoint_number_);
+  LOG_NUMBER("  ", "Hold Time", this->hold_time_number_);
+  LOG_NUMBER("  ", "My Temp", this->my_temp_number_);
   LOG_SWITCH("  ", "Heating Control", this->heating_switch_);
   LOG_SWITCH("  ", "BLE Connection", this->ble_connection_switch_);
+  LOG_SWITCH("  ", "Baby Formula", this->baby_formula_switch_);
 }
 
 void CosoriKettleBLE::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if,
@@ -100,7 +104,6 @@ void CosoriKettleBLE::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_i
       this->registration_sent_ = false;
       this->status_received_ = false;
       this->no_response_count_ = 0;
-      this->target_setpoint_initialized_ = false;
       // Clear chunking state
       this->send_chunk_index_ = 0;
       this->send_total_chunks_ = 0;
@@ -146,7 +149,7 @@ void CosoriKettleBLE::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_i
       ESP_LOGI(TAG, "Registered for notifications, sending registration handshake");
 
       // Send registration handshake
-      this->send_registration_();
+      this->send_hello_();
 
       // Mark registration sent
       this->registration_sent_ = true;
@@ -211,45 +214,11 @@ void CosoriKettleBLE::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_i
   }
 }
 
-// // TODO: what calls this?
-// void CosoriKettleBLE::update() {
-//   this->track_online_status_();
-
-//   if (!this->ble_enabled_) {
-//     return;
-//   }
-
-//   if (this->node_state != esp32_ble_tracker::ClientState::ESTABLISHED) {
-//     ESP_LOGD(TAG, "Not connected, skipping poll");
-//     return;
-//   }
-
-//   if (!this->registration_sent_) {
-//     ESP_LOGD(TAG, "Registration not complete, skipping poll");
-//     return;
-//   }
-
-//   // Process command state machine
-//   this->process_command_state_machine_();
-
-//   // Send poll if not in the middle of a command sequence
-//   // TODO: use if state is idle then state -> poll
-//   if (this->command_state_ == CommandState::IDLE) {
-//     this->send_poll_();
-//   }
-// }
-
 // ============================================================================
 // Protocol Implementation - Packet Sending
 // ============================================================================
 
-void CosoriKettleBLE::set_registration_key(const std::array<uint8_t, 16> &key) {
-  this->registration_key_ = key;
-  this->registration_key_set_ = true;
-  ESP_LOGD(TAG, "Registration key set");
-}
-
-void CosoriKettleBLE::send_registration_() {
+void CosoriKettleBLE::send_hello_() {
   // Verify registration key is set
   if (!this->registration_key_set_) {
     ESP_LOGE(TAG, "Registration key not set - cannot send hello command");
@@ -261,6 +230,121 @@ void CosoriKettleBLE::send_registration_() {
   this->command_state_ = CommandState::HANDSHAKE_PACKET_1;
   this->command_state_time_ = millis();
 }
+
+void CosoriKettleBLE::send_status_request_() {
+  if (!this->is_connected()) {
+    ESP_LOGV(TAG, "Cannot send poll: not connected");
+    return;
+  }
+  
+  uint8_t seq = this->next_tx_seq_();
+  uint8_t payload[] = {this->protocol_version_, 0x40, 0x40, 0x00};
+  ESP_LOGV(TAG, "Sending POLL (seq=%02x)", seq);
+  if (!this->send_command(seq, payload, sizeof(payload))) {
+    ESP_LOGW(TAG, "Failed to send POLL");
+  }
+}
+
+void CosoriKettleBLE::send_set_hold_time(uint16_t seconds) {
+  if (!this->is_connected()) {
+    ESP_LOGW(TAG, "Cannot send set hold time: not connected");
+    return;
+  }
+  
+  uint8_t seq = this->next_tx_seq_();
+  // Command: 01F2A300 + hold_time (2 bytes big-endian)
+  uint8_t payload[] = {
+    this->protocol_version_, 0xF2, 0xA3, 0x00,
+    static_cast<uint8_t>((seconds >> 8) & 0xFF),  // High byte
+    static_cast<uint8_t>(seconds & 0xFF)           // Low byte
+  };
+  ESP_LOGD(TAG, "Sending set hold time %u seconds (seq=%02x)", seconds, seq);
+  if (!this->send_command(seq, payload, sizeof(payload))) {
+    ESP_LOGW(TAG, "Failed to send set hold time");
+  }
+}
+
+void CosoriKettleBLE::send_set_my_temp(uint8_t temp_f) {
+  if (!this->is_connected()) {
+    ESP_LOGW(TAG, "Cannot send set my temp: not connected");
+    return;
+  }
+  
+  // Clamp to valid range
+  if (temp_f < MIN_TEMP_F)
+    temp_f = MIN_TEMP_F;
+  if (temp_f > MAX_TEMP_F)
+    temp_f = MAX_TEMP_F;
+  
+  uint8_t seq = this->next_tx_seq_();
+  // Command: 01F3A300 + temperature (1 byte)
+  uint8_t payload[] = {this->protocol_version_, 0xF3, 0xA3, 0x00, temp_f};
+  ESP_LOGD(TAG, "Sending set my temp %d°F (seq=%02x)", temp_f, seq);
+  if (!this->send_command(seq, payload, sizeof(payload))) {
+    ESP_LOGW(TAG, "Failed to send set my temp");
+  }
+}
+
+void CosoriKettleBLE::send_set_baby_formula(bool enabled) {
+  if (!this->is_connected()) {
+    ESP_LOGW(TAG, "Cannot send set baby formula: not connected");
+    return;
+  }
+  
+  uint8_t seq = this->next_tx_seq_();
+  // Command: 01F5A300 + enabled (1 byte: 0x01=enabled, 0x00=disabled)
+  uint8_t payload[] = {this->protocol_version_, 0xF5, 0xA3, 0x00, enabled ? 0x01 : 0x00};
+  ESP_LOGD(TAG, "Sending set baby formula %s (seq=%02x)", enabled ? "enabled" : "disabled", seq);
+  if (!this->send_command(seq, payload, sizeof(payload))) {
+    ESP_LOGW(TAG, "Failed to send set baby formula");
+  }
+}
+
+// TODO: this is "start heating" with a hold time of 60 minutes
+void CosoriKettleBLE::send_set_mode(uint8_t mode, uint8_t temp_f) {
+  if (!this->is_connected()) {
+    ESP_LOGW(TAG, "Cannot send setpoint: not connected");
+    return;
+  }
+  
+  uint8_t seq = this->next_tx_seq_();
+  uint8_t payload[] = {this->protocol_version_, 0xF0, 0xA3, 0x00, mode, temp_f, 0x01, 0x10, 0x0E};
+  ESP_LOGD(TAG, "Sending SETPOINT %d°F (seq=%02x, mode=%02x)", temp_f, seq, mode);
+  if (!this->send_command(seq, payload, sizeof(payload))) {
+    ESP_LOGW(TAG, "Failed to send SETPOINT");
+  }
+}
+
+void CosoriKettleBLE::send_stop() {
+  if (!this->is_connected()) {
+    ESP_LOGW(TAG, "Cannot send F4: not connected");
+    return;
+  }
+  
+  uint8_t seq = this->next_tx_seq_();
+  uint8_t payload[] = {this->protocol_version_, 0xF4, 0xA3, 0x00};
+  ESP_LOGD(TAG, "Sending F4 (seq=%02x)", seq);
+  if (!this->send_command(seq, payload, sizeof(payload))) {
+    ESP_LOGW(TAG, "Failed to send F4");
+  }
+}
+
+void CosoriKettleBLE::send_request_compact_status_(uint8_t seq_base) {
+  if (!this->is_connected()) {
+    ESP_LOGW(TAG, "Cannot send CTRL: not connected");
+    return;
+  }
+  
+  uint8_t payload[] = {this->protocol_version_, 0x41, 0x40, 0x00};
+  ESP_LOGD(TAG, "Sending CTRL (seq=%02x)", seq_base);
+  if (!this->send_command(seq_base, payload, sizeof(payload), true)) {
+    ESP_LOGW(TAG, "Failed to send CTRL");
+  }
+}
+
+// ============================================================================
+// Outgoing buffer management
+// ============================================================================
 
 bool CosoriKettleBLE::send_command(uint8_t seq, const uint8_t *payload, size_t payload_len, bool is_ack) {
   if (this->tx_char_handle_ == 0) {
@@ -315,79 +399,6 @@ bool CosoriKettleBLE::send_command(uint8_t seq, const uint8_t *payload, size_t p
   // Send first chunk immediately
   this->send_next_chunk_();
   return true;
-}
-
-void CosoriKettleBLE::send_poll_() {
-  if (!this->is_connected()) {
-    ESP_LOGV(TAG, "Cannot send poll: not connected");
-    return;
-  }
-  
-  uint8_t seq = this->next_tx_seq_();
-  const uint8_t payload[] = {0x00, 0x40, 0x40, 0x00};
-  ESP_LOGV(TAG, "Sending POLL (seq=%02x)", seq);
-  if (!this->send_command(seq, payload, sizeof(payload))) {
-    ESP_LOGW(TAG, "Failed to send POLL");
-  }
-}
-
-// TODO: this is "set hold time" 60 minutes
-void CosoriKettleBLE::send_hello5_() {
-  if (!this->is_connected()) {
-    ESP_LOGW(TAG, "Cannot send HELLO5: not connected");
-    return;
-  }
-  
-  uint8_t seq = this->next_tx_seq_();
-  const uint8_t payload[] = {0x00, 0xF2, 0xA3, 0x00, 0x00, 0x01, 0x10, 0x0E};
-  ESP_LOGD(TAG, "Sending HELLO5 (seq=%02x)", seq);
-  if (!this->send_command(seq, payload, sizeof(payload))) {
-    ESP_LOGW(TAG, "Failed to send HELLO5");
-  }
-}
-
-// TODO: this is "start heating" with a hold time of 60 minutes
-void CosoriKettleBLE::send_setpoint_(uint8_t mode, uint8_t temp_f) {
-  if (!this->is_connected()) {
-    ESP_LOGW(TAG, "Cannot send setpoint: not connected");
-    return;
-  }
-  
-  uint8_t seq = this->next_tx_seq_();
-  const uint8_t payload[] = {0x00, 0xF0, 0xA3, 0x00, mode, temp_f, 0x01, 0x10, 0x0E};
-  ESP_LOGD(TAG, "Sending SETPOINT %d°F (seq=%02x, mode=%02x)", temp_f, seq, mode);
-  if (!this->send_command(seq, payload, sizeof(payload))) {
-    ESP_LOGW(TAG, "Failed to send SETPOINT");
-  }
-}
-
-// TODO: f4 -> "stop"
-void CosoriKettleBLE::send_f4_() {
-  if (!this->is_connected()) {
-    ESP_LOGW(TAG, "Cannot send F4: not connected");
-    return;
-  }
-  
-  uint8_t seq = this->next_tx_seq_();
-  const uint8_t payload[] = {0x00, 0xF4, 0xA3, 0x00};
-  ESP_LOGD(TAG, "Sending F4 (seq=%02x)", seq);
-  if (!this->send_command(seq, payload, sizeof(payload))) {
-    ESP_LOGW(TAG, "Failed to send F4");
-  }
-}
-
-// TODO: ctrl -> "request compact status"  - probably not necessary?
-void CosoriKettleBLE::send_ctrl_(uint8_t seq_base) {
-  if (!this->is_connected()) {
-    ESP_LOGW(TAG, "Cannot send CTRL: not connected");
-    return;
-  }
-  
-  const uint8_t payload[] = {0x00, 0x41, 0x40, 0x00};
-  ESP_LOGD(TAG, "Sending CTRL (seq=%02x)", seq_base);
-  if (!this->send_command(seq_base, payload, sizeof(payload), true)) {
-    ESP_LOGW(TAG, "Failed to send CTRL");
-  }
 }
 
 void CosoriKettleBLE::send_packet_(const uint8_t *data, size_t len) {
@@ -489,7 +500,7 @@ void CosoriKettleBLE::send_next_chunk_() {
 
 
 // ============================================================================
-// Frame Processing
+// Incoming Frame Processing
 // ============================================================================
 
 void CosoriKettleBLE::process_frame_buffer_() {
@@ -581,6 +592,54 @@ void CosoriKettleBLE::parse_extended_status_(const uint8_t *payload, size_t len)
     }
   }
 
+  // My temp from payload[8] (body[4] after command header)
+  if (len >= 9) {
+    uint8_t mytemp = payload[8];
+    if (mytemp >= MIN_TEMP_F && mytemp <= MAX_TEMP_F) {
+      if (this->pending_my_temp_) {
+        // Clear pending flag - device has processed our command
+        // Update value now that device has confirmed
+        this->pending_my_temp_ = false;
+        this->my_temp_f_ = mytemp;
+        ESP_LOGD(TAG, "My temp update confirmed: %d°F", mytemp);
+      } else {
+        // Not pending, safe to update from device
+        this->my_temp_f_ = mytemp;
+      }
+    }
+  }
+
+  // Hold time from payload[15-16] (big-endian, body[11-12] after command header)
+  if (len >= 17) {
+    uint16_t hold_time = (static_cast<uint16_t>(payload[15]) << 8) | payload[16];
+    if (this->pending_hold_time_) {
+      // Clear pending flag - device has processed our command
+      // Update value now that device has confirmed
+      this->pending_hold_time_ = false;
+      this->hold_time_seconds_ = hold_time;
+      ESP_LOGD(TAG, "Hold time update confirmed: %u seconds", hold_time);
+    } else {
+      // Not pending, safe to update from device
+      this->hold_time_seconds_ = hold_time;
+    }
+  }
+
+  // Baby formula mode from payload[28] (body[24] after command header)
+  if (len >= 29) {
+    uint8_t baby_mode = payload[28];
+    bool baby_enabled = (baby_mode == 0x01);
+    if (this->pending_baby_formula_) {
+      // Clear pending flag - device has processed our command
+      // Update value now that device has confirmed
+      this->pending_baby_formula_ = false;
+      this->baby_formula_enabled_ = baby_enabled;
+      ESP_LOGD(TAG, "Baby formula update confirmed: %s", baby_enabled ? "enabled" : "disabled");
+    } else {
+      // Not pending, safe to update from device
+      this->baby_formula_enabled_ = baby_enabled;
+    }
+  }
+
   // Reset offline counter
   this->reset_online_status_();
 
@@ -604,7 +663,78 @@ void CosoriKettleBLE::set_target_setpoint(float temp_f) {
   
   // Update number entity if it exists
   if (this->target_setpoint_number_ != nullptr) {
+    // TODO: update this when the device reports a change too
     this->target_setpoint_number_->publish_state(temp_f);
+  }
+}
+
+void CosoriKettleBLE::set_hold_time(float seconds) {
+  // Clamp to valid range (0-65535 seconds)
+  if (seconds < 0.0f)
+    seconds = 0.0f;
+  if (seconds > 65535.0f)
+    seconds = 65535.0f;
+
+  uint16_t seconds_int = static_cast<uint16_t>(std::round(seconds));
+  this->hold_time_seconds_ = seconds_int;
+  this->pending_hold_time_ = true;
+  ESP_LOGI(TAG, "Hold time changed to %u seconds", seconds_int);
+  
+  // Update number entity if it exists
+  if (this->hold_time_number_ != nullptr) {
+    this->hold_time_number_->publish_state(seconds);
+  }
+
+  // Send command to device
+  if (this->is_connected()) {
+    this->send_set_hold_time(seconds_int);
+    // Clear pending flag after a delay (status update will confirm)
+    // For now, we'll clear it when we receive a status update
+  } else {
+    this->pending_hold_time_ = false;
+  }
+}
+
+void CosoriKettleBLE::set_my_temp(float temp_f) {
+  // Clamp to valid range
+  if (temp_f < MIN_TEMP_F)
+    temp_f = MIN_TEMP_F;
+  if (temp_f > MAX_TEMP_F)
+    temp_f = MAX_TEMP_F;
+
+  uint8_t temp_int = static_cast<uint8_t>(std::round(temp_f));
+  this->my_temp_f_ = temp_int;
+  this->pending_my_temp_ = true;
+  ESP_LOGI(TAG, "My temp changed to %d°F", temp_int);
+  
+  // Update number entity if it exists
+  if (this->my_temp_number_ != nullptr) {
+    this->my_temp_number_->publish_state(temp_f);
+  }
+
+  // Send command to device
+  if (this->is_connected()) {
+    this->send_set_my_temp(temp_int);
+  } else {
+    this->pending_my_temp_ = false;
+  }
+}
+
+void CosoriKettleBLE::set_baby_formula_enabled(bool enabled) {
+  this->baby_formula_enabled_ = enabled;
+  this->pending_baby_formula_ = true;
+  ESP_LOGI(TAG, "Baby formula mode changed to %s", enabled ? "enabled" : "disabled");
+  
+  // Update switch entity if it exists
+  if (this->baby_formula_switch_ != nullptr) {
+    this->baby_formula_switch_->publish_state(enabled);
+  }
+
+  // Send command to device
+  if (this->is_connected()) {
+    this->send_set_baby_formula(enabled);
+  } else {
+    this->pending_baby_formula_ = false;
   }
 }
 
@@ -656,6 +786,13 @@ void CosoriKettleBLE::enable_ble_connection(bool enable) {
   if (this->ble_connection_switch_ != nullptr) {
     this->ble_connection_switch_->publish_state(enable);
   }
+}
+
+void CosoriKettleBLE::set_registration_key(const std::array<uint8_t, 16> &key) {
+  // TODO: need publish_state?
+  this->registration_key_ = key;
+  this->registration_key_set_ = true;
+  ESP_LOGD(TAG, "Registration key set");
 }
 
 // ============================================================================
@@ -750,11 +887,40 @@ void CosoriKettleBLE::update_entities_() {
   }
 
   // Initialize target setpoint number with kettle's setpoint on first status
-  if (this->target_setpoint_number_ != nullptr && !this->target_setpoint_initialized_) {
+  if (this->target_setpoint_number_ != nullptr && !this->target_setpoint_number_->has_state()) {
     this->target_setpoint_f_ = this->kettle_setpoint_f_;
     this->target_setpoint_number_->publish_state(this->target_setpoint_f_);
-    this->target_setpoint_initialized_ = true;
     ESP_LOGI(TAG, "Initialized target setpoint to %d°F from kettle", static_cast<int>(this->target_setpoint_f_));
+  }
+
+  // Update hold time number (use entity state to determine if initialized)
+  if (this->hold_time_number_ != nullptr) {
+    if (!this->hold_time_number_->has_state()) {
+      // Not initialized yet, initialize from device value (can be 0)
+      this->hold_time_number_->publish_state(static_cast<float>(this->hold_time_seconds_));
+      ESP_LOGI(TAG, "Initialized hold time to %u seconds from kettle", this->hold_time_seconds_);
+    } else {
+      // Already initialized, update from device
+      this->hold_time_number_->publish_state(static_cast<float>(this->hold_time_seconds_));
+    }
+  }
+
+  // Update my temp number (use entity state to determine if initialized)
+  if (this->my_temp_number_ != nullptr) {
+    if (!this->my_temp_number_->has_state() && this->my_temp_f_ > 0) {
+      // Not initialized yet, initialize from device value
+      this->my_temp_number_->publish_state(static_cast<float>(this->my_temp_f_));
+      ESP_LOGI(TAG, "Initialized my temp to %d°F from kettle", this->my_temp_f_);
+    } else if (this->my_temp_number_->has_state()) {
+      // Already initialized, update from device
+      this->my_temp_number_->publish_state(static_cast<float>(this->my_temp_f_));
+    }
+  }
+
+  // Update baby formula switch (use entity state to determine if initialized)
+  // Switches always have a state, so we just update them
+  if (this->baby_formula_switch_ != nullptr) {
+    this->baby_formula_switch_->publish_state(this->baby_formula_enabled_);
   }
 
   if (this->on_base_binary_sensor_ != nullptr) {
@@ -779,10 +945,12 @@ void CosoriKettleBLE::update_climate_state_() {
   this->current_temperature = (this->current_temp_f_ - 32.0f) * 5.0f / 9.0f;
 
   // Initialize target temperature from kettle on first status
-  if (!this->target_setpoint_initialized_) {
+  // Use number entity's has_state() to determine if initialized
+  bool target_initialized = (this->target_setpoint_number_ != nullptr) && 
+                            this->target_setpoint_number_->has_state();
+  if (!target_initialized) {
     this->target_setpoint_f_ = this->kettle_setpoint_f_;
     this->target_temperature = (this->kettle_setpoint_f_ - 32.0f) * 5.0f / 9.0f;
-    this->target_setpoint_initialized_ = true;
     ESP_LOGI(TAG, "Climate: Initialized target temperature to %.0f°F (%.1f°C) from kettle",
              this->target_setpoint_f_, this->target_temperature);
   }
@@ -879,21 +1047,22 @@ void CosoriKettleBLE::process_command_state_machine_() {
 
     case CommandState::HANDSHAKE_POLL:
       if (elapsed >= HANDSHAKE_DELAY_MS) {
-        this->send_poll_();
+        this->send_status_request_();
         this->command_state_ = CommandState::IDLE;
         ESP_LOGI(TAG, "Registration handshake complete");
       }
       break;
 
     case CommandState::START_HELLO5:
-      this->send_hello5_();
+      // Use default hold time of 60 minutes (3600 seconds) for legacy compatibility
+      this->send_set_hold_time(3600);
       this->command_state_ = CommandState::START_SETPOINT;
       this->command_state_time_ = now;
       break;
 
     case CommandState::START_SETPOINT:
       if (elapsed >= PRE_SETPOINT_DELAY_MS) {
-        this->send_setpoint_(this->pending_mode_, this->pending_temp_f_);
+        this->send_set_mode(this->pending_mode_, this->pending_temp_f_);
         this->command_state_ = CommandState::START_WAIT_STATUS;
         this->command_state_time_ = now;
       }
@@ -903,7 +1072,7 @@ void CosoriKettleBLE::process_command_state_machine_() {
       if (elapsed >= POST_SETPOINT_DELAY_MS) {
         // Proceed to control even if no status (timeout after POST_SETPOINT_DELAY_MS)
         uint8_t seq_base = (this->last_status_seq_ != 0) ? this->last_status_seq_ : this->last_rx_seq_;
-        this->send_ctrl_(seq_base);
+        this->send_request_compact_status_(seq_base);
         this->command_state_ = CommandState::START_CTRL;
         this->command_state_time_ = now;
       }
@@ -912,7 +1081,7 @@ void CosoriKettleBLE::process_command_state_machine_() {
     case CommandState::START_CTRL:
       if (elapsed >= CONTROL_DELAY_MS) {
         uint8_t seq_ack = this->next_tx_seq_();
-        this->send_ctrl_(seq_ack);
+        this->send_request_compact_status_(seq_ack);
         this->command_state_ = CommandState::START_CTRL_REINFORCE;
         this->command_state_time_ = now;
       }
@@ -926,7 +1095,7 @@ void CosoriKettleBLE::process_command_state_machine_() {
       break;
 
     case CommandState::STOP_PRE_F4:
-      this->send_f4_();
+      this->send_stop();
       this->command_state_ = CommandState::STOP_CTRL;
       this->command_state_time_ = now;
       break;
@@ -934,7 +1103,7 @@ void CosoriKettleBLE::process_command_state_machine_() {
     case CommandState::STOP_CTRL:
       if (elapsed >= CONTROL_DELAY_MS) {
         uint8_t seq_ctrl = (this->last_status_seq_ != 0) ? this->last_status_seq_ : this->last_rx_seq_;
-        this->send_ctrl_(seq_ctrl);
+        this->send_request_compact_status_(seq_ctrl);
         this->command_state_ = CommandState::STOP_POST_F4;
         this->command_state_time_ = now;
       }
@@ -942,7 +1111,7 @@ void CosoriKettleBLE::process_command_state_machine_() {
 
     case CommandState::STOP_POST_F4:
       if (elapsed >= CONTROL_DELAY_MS) {
-        this->send_f4_();
+        this->send_stop();
         this->command_state_ = CommandState::IDLE;
         ESP_LOGD(TAG, "Stop heating sequence complete");
       }

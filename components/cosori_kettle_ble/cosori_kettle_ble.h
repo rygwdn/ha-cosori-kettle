@@ -34,15 +34,21 @@ class CosoriKettleBLE : public esphome::ble_client::BLEClientNode, public Pollin
   void set_on_base_binary_sensor(binary_sensor::BinarySensor *sensor) { on_base_binary_sensor_ = sensor; }
   void set_heating_binary_sensor(binary_sensor::BinarySensor *sensor) { heating_binary_sensor_ = sensor; }
 
-  // Number setter (target setpoint)
+  // Number setters
   void set_target_setpoint_number(number::Number *number) { target_setpoint_number_ = number; }
+  void set_hold_time_number(number::Number *number) { hold_time_number_ = number; }
+  void set_my_temp_number(number::Number *number) { my_temp_number_ = number; }
 
   // Switch setters
   void set_heating_switch(switch_::Switch *sw) { heating_switch_ = sw; }
   void set_ble_connection_switch(switch_::Switch *sw) { ble_connection_switch_ = sw; }
+  void set_baby_formula_switch(switch_::Switch *sw) { baby_formula_switch_ = sw; }
 
   // Public control methods (called by switches/numbers)
   void set_target_setpoint(float temp_f);
+  void set_hold_time(float seconds);
+  void set_my_temp(float temp_f);
+  void set_baby_formula_enabled(bool enabled);
   void start_heating();
   void stop_heating();
   void enable_ble_connection(bool enable);
@@ -86,6 +92,9 @@ class CosoriKettleBLE : public esphome::ble_client::BLEClientNode, public Pollin
   float current_temp_f_{0.0};
   float kettle_setpoint_f_{0.0};
   float target_setpoint_f_{212.0};
+  uint16_t hold_time_seconds_{0};
+  uint8_t my_temp_f_{179};
+  bool baby_formula_enabled_{false};
   bool on_base_{false};
   bool heating_{false};
 
@@ -94,7 +103,11 @@ class CosoriKettleBLE : public esphome::ble_client::BLEClientNode, public Pollin
   uint8_t no_response_count_{0};
   uint32_t last_poll_time_{0};
   bool registration_sent_{false};
-  bool target_setpoint_initialized_{false};
+  
+  // Pending update flags (ignore status updates while pending)
+  bool pending_hold_time_{false};
+  bool pending_my_temp_{false};
+  bool pending_baby_formula_{false};
 
   // Command sequence state machine
   enum class CommandState {
@@ -130,16 +143,21 @@ class CosoriKettleBLE : public esphome::ble_client::BLEClientNode, public Pollin
   binary_sensor::BinarySensor *on_base_binary_sensor_{nullptr};
   binary_sensor::BinarySensor *heating_binary_sensor_{nullptr};
   number::Number *target_setpoint_number_{nullptr};
+  number::Number *hold_time_number_{nullptr};
+  number::Number *my_temp_number_{nullptr};
   switch_::Switch *heating_switch_{nullptr};
   switch_::Switch *ble_connection_switch_{nullptr};
+  switch_::Switch *baby_formula_switch_{nullptr};
 
   // Protocol methods
-  void send_registration_();
-  void send_poll_();
-  void send_hello5_();
-  void send_setpoint_(uint8_t mode, uint8_t temp_f);
-  void send_f4_();
-  void send_ctrl_(uint8_t seq_base);
+  void send_hello_();
+  void send_status_request_();
+  void send_set_hold_time(uint16_t seconds);
+  void send_set_my_temp(uint8_t temp_f);
+  void send_set_baby_formula(bool enabled);
+  void send_set_mode(uint8_t mode, uint8_t temp_f);
+  void send_stop();
+  void send_request_compact_status_(uint8_t seq_base);
   void send_packet_(const uint8_t *data, size_t len);
   void send_next_chunk_();
   
@@ -179,6 +197,36 @@ class CosoriKettleNumber : public number::Number, public Component {
   CosoriKettleBLE *parent_{nullptr};
 };
 
+class CosoriKettleHoldTimeNumber : public number::Number, public Component {
+ public:
+  void set_parent(CosoriKettleBLE *parent) { this->parent_ = parent; }
+
+ protected:
+  void control(float value) override {
+    if (this->parent_ != nullptr) {
+      this->parent_->set_hold_time(value);
+    }
+    this->publish_state(value);
+  }
+
+  CosoriKettleBLE *parent_{nullptr};
+};
+
+class CosoriKettleMyTempNumber : public number::Number, public Component {
+ public:
+  void set_parent(CosoriKettleBLE *parent) { this->parent_ = parent; }
+
+ protected:
+  void control(float value) override {
+    if (this->parent_ != nullptr) {
+      this->parent_->set_my_temp(value);
+    }
+    this->publish_state(value);
+  }
+
+  CosoriKettleBLE *parent_{nullptr};
+};
+
 class CosoriKettleHeatingSwitch : public switch_::Switch, public Component {
  public:
   void set_parent(CosoriKettleBLE *parent) { this->parent_ = parent; }
@@ -210,6 +258,22 @@ class CosoriKettleBLEConnectionSwitch : public switch_::Switch, public Component
 
     this->parent_->enable_ble_connection(state);
     this->publish_state(state);
+  }
+
+  CosoriKettleBLE *parent_{nullptr};
+};
+
+class CosoriKettleBabyFormulaSwitch : public switch_::Switch, public Component {
+ public:
+  void set_parent(CosoriKettleBLE *parent) { this->parent_ = parent; }
+
+ protected:
+  void write_state(bool state) override {
+    if (this->parent_ == nullptr)
+      return;
+
+    this->parent_->set_baby_formula_enabled(state);
+    // Note: Don't call publish_state here - the parent will update us via the status frames
   }
 
   CosoriKettleBLE *parent_{nullptr};
