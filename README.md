@@ -355,6 +355,26 @@ This component implements the Cosori kettle BLE protocol reverse-engineered from
 
 See the [protocol documentation](protocol.md) for details (if available).
 
+## Testing
+
+### C++ Protocol Tester
+
+A standalone C++ test program is included to verify the envelope and protocol implementations against real device packets. This tester validates:
+
+- Envelope building and checksum calculation
+- Frame parsing from real device packets
+- Protocol payload generation
+- Status message parsing (compact and extended)
+- Round-trip tests (build → envelope → parse)
+
+**To build and run the tests:**
+
+```bash
+make -f Makefile.test test
+```
+
+The tester uses real device packets to ensure the C++ implementation matches the expected behavior.
+
 ## Troubleshooting
 
 ### Kettle Not Connecting

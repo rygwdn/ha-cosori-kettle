@@ -102,8 +102,8 @@ size_t build_set_hold_time_payload(uint8_t protocol_version, uint16_t seconds, u
   payload[3] = 0x00;
   payload[4] = 0x00;
   payload[5] = static_cast<uint8_t>((seconds > 0) ? 0x01 : 0x00);  // enable hold
-  payload[6] = static_cast<uint8_t>((seconds >> 8) & 0xFF);  // High byte
-  payload[7] = static_cast<uint8_t>(seconds & 0xFF);         // Low byte
+  payload[6] = static_cast<uint8_t>(seconds & 0xFF);         // Low byte
+  payload[7] = static_cast<uint8_t>((seconds >> 8) & 0xFF);  // High byte
   
   return 8;
 }
@@ -152,40 +152,33 @@ CompactStatus parse_compact_status(const uint8_t *payload, size_t len) {
     return status;
   }
 
-  uint8_t stage = payload[4];     // Heating stage
-  uint8_t mode = payload[5];      // Mode
-  uint8_t sp = payload[6];        // Setpoint temperature
   uint8_t temp = payload[7];      // Current temperature
-  uint8_t status_byte = payload[8]; // Heating status
 
   // Validate temperature range
   if (temp < MIN_VALID_READING_F || temp > MAX_VALID_READING_F) {
     return status;
   }
 
-  status.stage = stage;
-  status.mode = mode;
-  status.setpoint = sp;
   status.temp = temp;
-  status.status = status_byte;
+  status.mode = payload[5];      // Mode
+  status.setpoint = payload[6];        // Setpoint temperature
+  status.stage = payload[4];     // Heating stage
+  status.status = payload[8]; // Heating status
   status.valid = true;
   
   return status;
 }
 
 ExtendedStatus parse_extended_status(const uint8_t *payload, size_t len) {
-  ExtendedStatus status = {0, 0, 0, 0, 0, 0, false, false, false, false, false, false, false};
+  ExtendedStatus status = {0, 0, 0, 0, 0, 0, 0, 0, false, false};
   
   // Extended status: 01 40 40 00 <stage> <mode> <sp> <temp> ... <on_base> ...
   // NOTE: Extended packets (A512 = A5 + 12, len=29) contain on-base detection at payload[14] (byte 20)
   // Compact packets (A522 = A5 + 22, len=12) do NOT contain on-base information
-  if (len < 8 || payload[1] != CMD_POLL) {
+  if (len < 29 || payload[1] != CMD_POLL) {
     return status;
   }
 
-  uint8_t stage = payload[4];
-  uint8_t mode = payload[5];
-  uint8_t sp = payload[6];
   uint8_t temp = payload[7];
 
   // Validate temperature range
@@ -193,40 +186,21 @@ ExtendedStatus parse_extended_status(const uint8_t *payload, size_t len) {
     return status;
   }
 
-  status.stage = stage;
-  status.mode = mode;
-  status.setpoint = sp;
+  status.stage = payload[4];
+  status.mode = payload[5];
+  status.setpoint = payload[6];
   status.temp = temp;
   status.valid = true;
 
-  // My temp from payload[8] (body[4] after command header)
-  if (len >= 9) {
-    uint8_t mytemp = payload[8];
-    if (mytemp >= MIN_TEMP_F && mytemp <= MAX_TEMP_F) {
-      status.my_temp = mytemp;
-      status.has_my_temp = true;
-    }
+  uint8_t mytemp = payload[8];
+  if (mytemp >= MIN_TEMP_F && mytemp <= MAX_TEMP_F) {
+    status.my_temp = mytemp;
   }
 
-  // On-base detection from payload[14] (byte 20 in full packet)
-  if (len >= 15) {
-    uint8_t on_base_byte = payload[14];
-    status.on_base = (on_base_byte == 0x00);  // 0x00=on-base, 0x01=off-base
-    status.has_on_base = true;
-  }
-
-  // Hold time from payload[15-16] (big-endian, body[11-12] after command header)
-  if (len >= 17) {
-    status.hold_time = (static_cast<uint16_t>(payload[15]) << 8) | payload[16];
-    status.has_hold_time = true;
-  }
-
-  // Baby formula mode from payload[28] (body[24] after command header)
-  if (len >= 29) {
-    uint8_t baby_mode = payload[28];
-    status.baby_formula_enabled = (baby_mode == 0x01);
-    status.has_baby_formula = true;
-  }
+  status.on_base = (payload[14] == 0x00);  // 0x00=on-base, 0x01=off-base
+  status.configured_hold_time = (static_cast<uint16_t>(payload[11]) << 8) | payload[10];
+  status.remaining_hold_time = (static_cast<uint16_t>(payload[13]) << 8) | payload[12];
+  status.baby_formula_enabled = (payload[26] == 0x01);
   
   return status;
 }

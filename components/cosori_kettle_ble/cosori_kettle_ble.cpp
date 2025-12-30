@@ -632,11 +632,11 @@ void CosoriKettleBLE::parse_status_ack_(const uint8_t *payload, size_t len) {
       // Clear pending flag - device has processed our command
       // Update value now that device has confirmed
       this->pending_hold_time_ = false;
-      this->hold_time_seconds_ = status.hold_time;
-      ESP_LOGD(TAG, "Hold time update confirmed: %u seconds", status.hold_time);
+      this->hold_time_seconds_ = status.configured_hold_time;
+      ESP_LOGD(TAG, "Hold time update confirmed: %u seconds", status.configured_hold_time);
     } else {
       // Not pending, safe to update from device
-      this->hold_time_seconds_ = status.hold_time;
+      this->hold_time_seconds_ = status.configured_hold_time;
     }
   }
 

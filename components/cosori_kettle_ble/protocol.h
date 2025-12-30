@@ -47,20 +47,16 @@ struct CompactStatus {
 };
 
 struct ExtendedStatus {
-  uint8_t stage;              // Heating stage
-  uint8_t mode;              // Operating mode
-  uint8_t setpoint;          // Setpoint temperature (°F)
-  uint8_t temp;              // Current temperature (°F)
-  uint8_t my_temp;           // My temp setting (°F)
-  uint16_t hold_time;        // Hold time (seconds)
-  bool on_base;              // On base status
-  bool baby_formula_enabled; // Baby formula mode
-  bool valid;                // Whether the status is valid
-  // Optional field presence flags
-  bool has_my_temp;          // Whether my_temp field was present and valid
-  bool has_on_base;          // Whether on_base field was present
-  bool has_hold_time;        // Whether hold_time field was present
-  bool has_baby_formula;     // Whether baby_formula field was present
+  uint8_t stage;                 // Heating stage
+  uint8_t mode;                  // Operating mode
+  uint8_t setpoint;              // Setpoint temperature (°F)
+  uint8_t temp;                  // Current temperature (°F)
+  uint8_t my_temp;               // My temp setting (°F)
+  uint16_t configured_hold_time; // Total hold time (seconds)
+  uint16_t remaining_hold_time;  // Remaining hold time (seconds)
+  bool on_base;                  // On base status
+  bool baby_formula_enabled;     // Baby formula mode
+  bool valid;                    // Whether the status is valid
 };
 
 // ============================================================================
