@@ -91,13 +91,13 @@ class Envelope {
     return true;
   }
 
-  // Build a message packet (A522 = A5 + 22) into this buffer
-  bool build_message(uint8_t seq, const uint8_t *payload, size_t payload_len) {
+  // Set payload for a message packet (A522 = A5 + 22)
+  bool set_message_payload(uint8_t seq, const uint8_t *payload, size_t payload_len) {
     return build(MESSAGE_HEADER_TYPE, seq, payload, payload_len);
   }
 
-  // Build an ACK packet (A512 = A5 + 12) into this buffer
-  bool build_ack(uint8_t seq, const uint8_t *payload, size_t payload_len) {
+  // Set payload for an ACK packet (A512 = A5 + 12)
+  bool set_ack_payload(uint8_t seq, const uint8_t *payload, size_t payload_len) {
     return build(ACK_HEADER_TYPE, seq, payload, payload_len);
   }
 
