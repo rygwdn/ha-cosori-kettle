@@ -81,21 +81,27 @@ void CosoriKettleBLE::dump_config() {
 }
 
 void CosoriKettleBLE::update() {
+  this->track_online_status_();
+  if (!this->ble_enabled_) {
+    return;
+  }
+
+  if (!this->is_connected()) {
+    ESP_LOGD(TAG, "Not connected, skipping poll");
+    return;
+  }
+
+  if (!this->registration_sent_) {
+    ESP_LOGD(TAG, "Registration not complete, skipping poll");
+    return;
+  }
+
   // Process command state machine
   this->process_command_state_machine_();
 
-  // Track online status (increment counter if no status received)
-  if (this->is_connected()) {
-    this->track_online_status_();
-
-    // Send periodic status requests if connected and idle
-    if (this->command_state_ == CommandState::IDLE && this->status_received_) {
-      uint32_t now = millis();
-      if (now - this->last_poll_time_ >= this->get_update_interval()) {
-        this->send_status_request_();
-        this->last_poll_time_ = now;
-      }
-    }
+  // Send periodic status requests if connected and idle
+  if (this->command_state_ == CommandState::IDLE) {
+    this->send_status_request_();
   }
 }
 
@@ -964,6 +970,7 @@ void CosoriKettleBLE::track_online_status_() {
       this->temperature_sensor_->publish_state(NAN);
     if (this->kettle_setpoint_sensor_ != nullptr)
       this->kettle_setpoint_sensor_->publish_state(NAN);
+    // TODO: update other entities
   }
 }
 

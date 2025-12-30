@@ -104,7 +104,6 @@ class CosoriKettleBLE : public esphome::ble_client::BLEClientNode, public Pollin
   // Connection management
   bool ble_enabled_{true};
   uint8_t no_response_count_{0};
-  uint32_t last_poll_time_{0};
   bool registration_sent_{false};
   
   // Pending update flags (ignore status updates while pending)
