@@ -109,8 +109,8 @@ void CosoriKettleBLE::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_i
       this->no_response_count_ = 0;
       this->target_setpoint_initialized_ = false;
       // Clear chunking state
-      this->send_buffer_len_ = 0;
-      this->send_buffer_pos_ = 0;
+      this->send_chunks_.clear();
+      this->send_chunk_index_ = 0;
       this->waiting_for_write_ack_ = false;
       break;
 
@@ -163,15 +163,15 @@ void CosoriKettleBLE::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_i
       // Handle write acknowledgment for chunked packets
       if (this->waiting_for_write_ack_ && param->write.handle == this->tx_char_handle_) {
         if (param->write.status == ESP_GATT_OK) {
-          // Move to next chunk position
-          this->send_buffer_pos_ += BLE_CHUNK_SIZE;
+          // Move to next chunk
+          this->send_chunk_index_++;
           this->waiting_for_write_ack_ = false;
           // Send next chunk if available
           this->send_next_chunk_();
         } else {
           ESP_LOGW(TAG, "Write failed, status=%d", param->write.status);
-          this->send_buffer_len_ = 0;
-          this->send_buffer_pos_ = 0;
+          this->send_chunks_.clear();
+          this->send_chunk_index_ = 0;
           this->waiting_for_write_ack_ = false;
         }
       }
@@ -215,6 +215,7 @@ void CosoriKettleBLE::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_i
   }
 }
 
+// TODO: what calls this?
 void CosoriKettleBLE::update() {
   this->track_online_status_();
 
@@ -245,6 +246,10 @@ void CosoriKettleBLE::update() {
 // Protocol Implementation - Packet Sending
 // ============================================================================
 
+// TODO: implement proper batched send
+// TODO: implement wait for ACK
+// TODO: remove "default" handshake packets - they're private info
+// TODO: handshake packets / hello -> registration key
 void CosoriKettleBLE::set_handshake_packet(int index, const std::vector<uint8_t> &data) {
   switch (index) {
     case 0:
@@ -270,6 +275,10 @@ void CosoriKettleBLE::send_registration_() {
   this->command_state_ = CommandState::HANDSHAKE_PACKET_1;
   this->command_state_time_ = millis();
 }
+
+// TODO: add Envelope class and use it
+// TODO: add ProtocolV1 class and use it
+// TODO: add ProtocolV0 class and use it
 
 void CosoriKettleBLE::send_poll_() {
   if (!this->is_connected()) {
@@ -307,6 +316,7 @@ void CosoriKettleBLE::send_setpoint_(uint8_t mode, uint8_t temp_f) {
   this->send_packet_(pkt.data(), pkt.size());
 }
 
+// TODO: f4 -> "stop"
 void CosoriKettleBLE::send_f4_() {
   if (!this->is_connected()) {
     ESP_LOGW(TAG, "Cannot send F4: not connected");
@@ -319,6 +329,7 @@ void CosoriKettleBLE::send_f4_() {
   this->send_packet_(pkt.data(), pkt.size());
 }
 
+// TODO: ctrl -> "ACK"
 void CosoriKettleBLE::send_ctrl_(uint8_t seq_base) {
   if (!this->is_connected()) {
     ESP_LOGW(TAG, "Cannot send CTRL: not connected");
@@ -336,12 +347,6 @@ void CosoriKettleBLE::send_packet_(const uint8_t *data, size_t len) {
     return;
   }
 
-  // Check buffer size
-  if (len > SEND_BUFFER_SIZE) {
-    ESP_LOGE(TAG, "Packet too large (%zu bytes, max %zu)", len, SEND_BUFFER_SIZE);
-    return;
-  }
-
   // Log full TX packet as hex dump (only when DEBUG level is enabled)
   if (esp_log_level_get(TAG) >= ESP_LOG_DEBUG) {
     std::string hex_str;
@@ -354,10 +359,19 @@ void CosoriKettleBLE::send_packet_(const uint8_t *data, size_t len) {
     ESP_LOGD(TAG, "TX: %s", hex_str.c_str());
   }
 
-  // Copy packet to send buffer (no heap allocation)
-  memcpy(this->send_buffer_, data, len);
-  this->send_buffer_len_ = len;
-  this->send_buffer_pos_ = 0;
+  // Convert to vector for Envelope::chunk()
+  std::vector<uint8_t> packet(data, data + len);
+  
+  // Use Envelope::chunk() to split packet into BLE chunks
+  this->send_chunks_ = Envelope::chunk(packet);
+  
+  if (this->send_chunks_.empty()) {
+    ESP_LOGW(TAG, "No chunks to send");
+    return;
+  }
+
+  // Reset chunking state
+  this->send_chunk_index_ = 0;
   this->waiting_for_write_ack_ = false;
 
   // Send first chunk immediately
@@ -367,41 +381,40 @@ void CosoriKettleBLE::send_packet_(const uint8_t *data, size_t len) {
 void CosoriKettleBLE::send_next_chunk_() {
   if (this->tx_char_handle_ == 0) {
     ESP_LOGW(TAG, "TX characteristic not ready");
-    this->send_buffer_len_ = 0;
-    this->send_buffer_pos_ = 0;
+    this->send_chunks_.clear();
+    this->send_chunk_index_ = 0;
     this->waiting_for_write_ack_ = false;
     return;
   }
 
-  // Check if we have more data to send
-  if (this->send_buffer_pos_ >= this->send_buffer_len_) {
+  // Check if we have more chunks to send
+  if (this->send_chunk_index_ >= this->send_chunks_.size()) {
     // All chunks sent
-    this->send_buffer_len_ = 0;
-    this->send_buffer_pos_ = 0;
+    this->send_chunks_.clear();
+    this->send_chunk_index_ = 0;
     this->waiting_for_write_ack_ = false;
     return;
   }
 
-  // Calculate chunk size (max 20 bytes per BLE write)
-  size_t remaining = this->send_buffer_len_ - this->send_buffer_pos_;
-  size_t chunk_size = (remaining > BLE_CHUNK_SIZE) ? BLE_CHUNK_SIZE : remaining;
-  size_t total_chunks = (this->send_buffer_len_ + BLE_CHUNK_SIZE - 1) / BLE_CHUNK_SIZE;
-  size_t current_chunk = (this->send_buffer_pos_ / BLE_CHUNK_SIZE) + 1;
+  // Get current chunk
+  const auto &chunk = this->send_chunks_[this->send_chunk_index_];
+  size_t total_chunks = this->send_chunks_.size();
+  size_t current_chunk = this->send_chunk_index_ + 1;
 
   // Send current chunk
   this->waiting_for_write_ack_ = true;
 
   auto status = esp_ble_gattc_write_char(this->parent_->get_gattc_if(), this->parent_->get_conn_id(),
-                                          this->tx_char_handle_, chunk_size,
-                                          this->send_buffer_ + this->send_buffer_pos_,
+                                          this->tx_char_handle_, chunk.size(),
+                                          const_cast<uint8_t *>(chunk.data()),
                                           ESP_GATT_WRITE_TYPE_NO_RSP, ESP_GATT_AUTH_REQ_NONE);
   if (status) {
     ESP_LOGW(TAG, "Error sending chunk %zu/%zu, status=%d", current_chunk, total_chunks, status);
-    this->send_buffer_len_ = 0;
-    this->send_buffer_pos_ = 0;
+    this->send_chunks_.clear();
+    this->send_chunk_index_ = 0;
     this->waiting_for_write_ack_ = false;
   } else {
-    ESP_LOGD(TAG, "Sent chunk %zu/%zu (%zu bytes)", current_chunk, total_chunks, chunk_size);
+    ESP_LOGD(TAG, "Sent chunk %zu/%zu (%zu bytes)", current_chunk, total_chunks, chunk.size());
   }
 }
 
@@ -457,6 +470,8 @@ std::vector<uint8_t> CosoriKettleBLE::make_ctrl_(uint8_t seq) {
 
 void CosoriKettleBLE::process_frame_buffer_() {
   while (true) {
+    // TODO: parse with envelope class
+
     // Find frame start (FRAME_MAGIC)
     size_t start_idx = 0;
     while (start_idx < this->frame_buffer_.size() && this->frame_buffer_[start_idx] != FRAME_MAGIC) {
@@ -508,6 +523,7 @@ void CosoriKettleBLE::process_frame_buffer_() {
     // Update last RX sequence
     this->last_rx_seq_ = seq;
 
+    // TODO: parse based on frame type AND command
     // Parse based on frame type
     if (frame_type == FRAME_TYPE_COMPACT_STATUS) {
       // Compact status (A5 22)
@@ -871,7 +887,7 @@ void CosoriKettleBLE::process_command_state_machine_() {
 
     case CommandState::HANDSHAKE_WAIT_CHUNKS:
       // Wait for all chunks to be sent (waiting_for_write_ack_ will be false when done)
-      if (!this->waiting_for_write_ack_ && this->send_buffer_len_ == 0) {
+      if (!this->waiting_for_write_ack_ && this->send_chunks_.empty()) {
         // All chunks sent, proceed to poll
         this->command_state_ = CommandState::HANDSHAKE_POLL;
         this->command_state_time_ = now;

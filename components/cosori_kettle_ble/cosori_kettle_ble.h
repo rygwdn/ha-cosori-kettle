@@ -70,11 +70,9 @@ class CosoriKettleBLE : public esphome::ble_client::BLEClientNode, public Pollin
   bool status_received_{false};
   std::vector<uint8_t> frame_buffer_;
 
-  // Chunking state for large packets (fixed-size buffer, no heap allocation)
-  static constexpr size_t SEND_BUFFER_SIZE = 256;
-  uint8_t send_buffer_[SEND_BUFFER_SIZE];
-  size_t send_buffer_len_{0};
-  size_t send_buffer_pos_{0};
+  // Chunking state for large packets (using Envelope::chunk())
+  std::vector<std::vector<uint8_t>> send_chunks_;
+  size_t send_chunk_index_{0};
   bool waiting_for_write_ack_{false};
 
   // Kettle state
