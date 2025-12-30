@@ -11,6 +11,7 @@
 #ifdef USE_ESP32
 
 #include <vector>
+#include <array>
 #include "envelope.h"
 
 namespace esphome {
@@ -50,8 +51,8 @@ class CosoriKettleBLE : public esphome::ble_client::BLEClientNode, public Pollin
   bool is_connected() const { return this->node_state == esp32_ble_tracker::ClientState::ESTABLISHED; }
   bool is_ble_enabled() const { return ble_enabled_; }
 
-  // Custom handshake configuration (for different kettle firmware)
-  void set_handshake_packet(int index, const std::vector<uint8_t> &data);
+  // Registration key configuration (16-byte key for hello/reconnect)
+  void set_registration_key(const std::array<uint8_t, 16> &key);
 
   // Climate interface
   climate::ClimateTraits traits() override;
@@ -113,11 +114,9 @@ class CosoriKettleBLE : public esphome::ble_client::BLEClientNode, public Pollin
   uint8_t pending_mode_{0};
   uint8_t pending_temp_f_{0};
 
-  // Custom handshake storage (optional override for different kettle firmware)
-  std::vector<uint8_t> custom_hello_1_;
-  std::vector<uint8_t> custom_hello_2_;
-  std::vector<uint8_t> custom_hello_3_;
-  bool use_custom_handshake_{false};
+  // Registration key (16 bytes) for hello/reconnect command
+  std::array<uint8_t, 16> registration_key_{};
+  bool registration_key_set_{false};
 
   // Entity pointers
   sensor::Sensor *temperature_sensor_{nullptr};
@@ -137,12 +136,9 @@ class CosoriKettleBLE : public esphome::ble_client::BLEClientNode, public Pollin
   void send_ctrl_(uint8_t seq_base);
   void send_packet_(const uint8_t *data, size_t len);
   void send_next_chunk_();
-
-  std::vector<uint8_t> make_poll_(uint8_t seq);
-  std::vector<uint8_t> make_hello5_(uint8_t seq);
-  std::vector<uint8_t> make_setpoint_(uint8_t seq, uint8_t mode, uint8_t temp_f);
-  std::vector<uint8_t> make_f4_(uint8_t seq);
-  std::vector<uint8_t> make_ctrl_(uint8_t seq);
+  
+  // Send command with payload (updates envelope directly)
+  bool send_command(uint8_t seq, const uint8_t *payload, size_t payload_len, bool is_ack = false);
 
   // Frame parsing
   void process_frame_buffer_();

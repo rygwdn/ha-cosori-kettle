@@ -47,13 +47,6 @@ static const char *COSORI_SERVICE_UUID = "0000fff0-0000-1000-8000-00805f9b34fb";
 static const char *COSORI_RX_CHAR_UUID = "0000fff1-0000-1000-8000-00805f9b34fb";
 static const char *COSORI_TX_CHAR_UUID = "0000fff2-0000-1000-8000-00805f9b34fb";
 
-// Registration handshake (HELLO_MIN)
-static const uint8_t HELLO_MIN_1[] = {0xa5, 0x22, 0x00, 0x24, 0x00, 0x8a, 0x00, 0x81, 0xd1, 0x00,
-                                       0x36, 0x34, 0x32, 0x38, 0x37, 0x61, 0x39, 0x31, 0x37, 0x65};
-static const uint8_t HELLO_MIN_2[] = {0x37, 0x34, 0x36, 0x61, 0x30, 0x37, 0x33, 0x31, 0x31, 0x36,
-                                       0x36, 0x62, 0x37, 0x36, 0x66, 0x34, 0x33, 0x64, 0x35, 0x63};
-static const uint8_t HELLO_MIN_3[] = {0x62, 0x62};
-
 void CosoriKettleBLE::setup() {
   ESP_LOGCONFIG(TAG, "Setting up Cosori Kettle BLE...");
   // Initialize state
@@ -247,30 +240,19 @@ void CosoriKettleBLE::update() {
 // Protocol Implementation - Packet Sending
 // ============================================================================
 
-// TODO: implement proper batched send
-// TODO: implement wait for ACK
-// TODO: remove "default" handshake packets - they're private info
-// TODO: handshake packets / hello -> registration key
-void CosoriKettleBLE::set_handshake_packet(int index, const std::vector<uint8_t> &data) {
-  switch (index) {
-    case 0:
-      this->custom_hello_1_ = data;
-      break;
-    case 1:
-      this->custom_hello_2_ = data;
-      break;
-    case 2:
-      this->custom_hello_3_ = data;
-      break;
-    default:
-      ESP_LOGW(TAG, "Invalid handshake packet index: %d", index);
-      return;
-  }
-  this->use_custom_handshake_ = true;
-  ESP_LOGD(TAG, "Custom handshake packet %d set (%d bytes)", index, data.size());
+void CosoriKettleBLE::set_registration_key(const std::array<uint8_t, 16> &key) {
+  this->registration_key_ = key;
+  this->registration_key_set_ = true;
+  ESP_LOGD(TAG, "Registration key set");
 }
 
 void CosoriKettleBLE::send_registration_() {
+  // Verify registration key is set
+  if (!this->registration_key_set_) {
+    ESP_LOGE(TAG, "Registration key not set - cannot send hello command");
+    return;
+  }
+  
   // Start handshake state machine instead of blocking
   ESP_LOGI(TAG, "Starting registration handshake");
   this->command_state_ = CommandState::HANDSHAKE_PACKET_1;
@@ -280,6 +262,61 @@ void CosoriKettleBLE::send_registration_() {
 // TODO: add ProtocolV1 class and use it
 // TODO: add ProtocolV0 class and use it
 
+bool CosoriKettleBLE::send_command(uint8_t seq, const uint8_t *payload, size_t payload_len, bool is_ack) {
+  if (this->tx_char_handle_ == 0) {
+    ESP_LOGW(TAG, "TX characteristic not ready");
+    return false;
+  }
+
+  // Check if already sending something or waiting
+  if (this->waiting_for_write_ack_ || (this->send_chunk_index_ < this->send_total_chunks_)) {
+    ESP_LOGW(TAG, "Cannot send command: already sending (chunk %zu/%zu, waiting=%d)",
+             this->send_chunk_index_, this->send_total_chunks_, this->waiting_for_write_ack_);
+    return false;
+  }
+
+  // Set payload in send buffer
+  bool success;
+  if (is_ack) {
+    success = send_buffer.set_ack_payload(seq, payload, payload_len);
+  } else {
+    success = send_buffer.set_message_payload(seq, payload, payload_len);
+  }
+
+  if (!success) {
+    ESP_LOGW(TAG, "Failed to set payload in send buffer");
+    return false;
+  }
+
+  // Log full TX packet as hex dump (only when DEBUG level is enabled)
+  if (esp_log_level_get(TAG) >= ESP_LOG_DEBUG) {
+    std::string hex_str;
+    hex_str.reserve(send_buffer.size() * 3);  // Pre-allocate: "xx:" per byte
+    for (size_t i = 0; i < send_buffer.size(); i++) {
+      char buf[4];
+      snprintf(buf, sizeof(buf), "%02x%s", send_buffer.data()[i], (i < send_buffer.size() - 1) ? ":" : "");
+      hex_str += buf;
+    }
+    ESP_LOGD(TAG, "TX: %s", hex_str.c_str());
+  }
+
+  // Calculate total chunks needed
+  this->send_total_chunks_ = send_buffer.get_chunk_count();
+  
+  if (this->send_total_chunks_ == 0) {
+    ESP_LOGW(TAG, "No chunks to send");
+    return false;
+  }
+
+  // Reset chunking state
+  this->send_chunk_index_ = 0;
+  this->waiting_for_write_ack_ = false;
+
+  // Send first chunk immediately
+  this->send_next_chunk_();
+  return true;
+}
+
 void CosoriKettleBLE::send_poll_() {
   if (!this->is_connected()) {
     ESP_LOGV(TAG, "Cannot send poll: not connected");
@@ -287,9 +324,11 @@ void CosoriKettleBLE::send_poll_() {
   }
   
   uint8_t seq = this->next_tx_seq_();
-  auto pkt = this->make_poll_(seq);
+  const uint8_t payload[] = {0x00, 0x40, 0x40, 0x00};
   ESP_LOGV(TAG, "Sending POLL (seq=%02x)", seq);
-  this->send_packet_(pkt.data(), pkt.size());
+  if (!this->send_command(seq, payload, sizeof(payload))) {
+    ESP_LOGW(TAG, "Failed to send POLL");
+  }
 }
 
 void CosoriKettleBLE::send_hello5_() {
@@ -299,9 +338,11 @@ void CosoriKettleBLE::send_hello5_() {
   }
   
   uint8_t seq = this->next_tx_seq_();
-  auto pkt = this->make_hello5_(seq);
+  const uint8_t payload[] = {0x00, 0xF2, 0xA3, 0x00, 0x00, 0x01, 0x10, 0x0E};
   ESP_LOGD(TAG, "Sending HELLO5 (seq=%02x)", seq);
-  this->send_packet_(pkt.data(), pkt.size());
+  if (!this->send_command(seq, payload, sizeof(payload))) {
+    ESP_LOGW(TAG, "Failed to send HELLO5");
+  }
 }
 
 void CosoriKettleBLE::send_setpoint_(uint8_t mode, uint8_t temp_f) {
@@ -311,9 +352,11 @@ void CosoriKettleBLE::send_setpoint_(uint8_t mode, uint8_t temp_f) {
   }
   
   uint8_t seq = this->next_tx_seq_();
-  auto pkt = this->make_setpoint_(seq, mode, temp_f);
+  const uint8_t payload[] = {0x00, 0xF0, 0xA3, 0x00, mode, temp_f, 0x01, 0x10, 0x0E};
   ESP_LOGD(TAG, "Sending SETPOINT %d°F (seq=%02x, mode=%02x)", temp_f, seq, mode);
-  this->send_packet_(pkt.data(), pkt.size());
+  if (!this->send_command(seq, payload, sizeof(payload))) {
+    ESP_LOGW(TAG, "Failed to send SETPOINT");
+  }
 }
 
 // TODO: f4 -> "stop"
@@ -324,9 +367,11 @@ void CosoriKettleBLE::send_f4_() {
   }
   
   uint8_t seq = this->next_tx_seq_();
-  auto pkt = this->make_f4_(seq);
+  const uint8_t payload[] = {0x00, 0xF4, 0xA3, 0x00};
   ESP_LOGD(TAG, "Sending F4 (seq=%02x)", seq);
-  this->send_packet_(pkt.data(), pkt.size());
+  if (!this->send_command(seq, payload, sizeof(payload))) {
+    ESP_LOGW(TAG, "Failed to send F4");
+  }
 }
 
 // TODO: ctrl -> "ACK"
@@ -336,14 +381,30 @@ void CosoriKettleBLE::send_ctrl_(uint8_t seq_base) {
     return;
   }
   
-  auto pkt = this->make_ctrl_(seq_base);
+  const uint8_t payload[] = {0x00, 0x41, 0x40, 0x00};
   ESP_LOGD(TAG, "Sending CTRL (seq=%02x)", seq_base);
-  this->send_packet_(pkt.data(), pkt.size());
+  if (!this->send_command(seq_base, payload, sizeof(payload), true)) {
+    ESP_LOGW(TAG, "Failed to send CTRL");
+  }
 }
 
 void CosoriKettleBLE::send_packet_(const uint8_t *data, size_t len) {
   if (this->tx_char_handle_ == 0) {
     ESP_LOGW(TAG, "TX characteristic not ready");
+    return;
+  }
+
+  // Check if already sending something or waiting
+  if (this->waiting_for_write_ack_ || (this->send_chunk_index_ < this->send_total_chunks_)) {
+    ESP_LOGW(TAG, "Cannot send packet: already sending (chunk %zu/%zu, waiting=%d)",
+             this->send_chunk_index_, this->send_total_chunks_, this->waiting_for_write_ack_);
+    return;
+  }
+
+  // Copy data to send_buffer (for raw packets like handshake)
+  send_buffer.clear();
+  if (!send_buffer.append(data, len)) {
+    ESP_LOGW(TAG, "Failed to append data to send buffer");
     return;
   }
 
@@ -357,13 +418,6 @@ void CosoriKettleBLE::send_packet_(const uint8_t *data, size_t len) {
       hex_str += buf;
     }
     ESP_LOGD(TAG, "TX: %s", hex_str.c_str());
-  }
-
-  // Copy data to send_buffer
-  send_buffer.clear();
-  if (!send_buffer.append(data, len)) {
-    ESP_LOGW(TAG, "Failed to append data to send buffer");
-    return;
   }
   
   // Calculate total chunks needed
@@ -431,55 +485,6 @@ void CosoriKettleBLE::send_next_chunk_() {
   }
 }
 
-// ============================================================================
-// Packet Builders
-// ============================================================================
-
-
-std::vector<uint8_t> CosoriKettleBLE::make_poll_(uint8_t seq) {
-  const uint8_t payload[] = {0x00, 0x40, 0x40, 0x00};
-  if (!send_buffer.build_message(seq, payload, sizeof(payload))) {
-    ESP_LOGW(TAG, "Failed to build message packet (A522)");
-    return std::vector<uint8_t>();
-  }
-  return std::vector<uint8_t>(send_buffer.data(), send_buffer.data() + send_buffer.size());
-}
-
-std::vector<uint8_t> CosoriKettleBLE::make_hello5_(uint8_t seq) {
-  const uint8_t payload[] = {0x00, 0xF2, 0xA3, 0x00, 0x00, 0x01, 0x10, 0x0E};
-  if (!send_buffer.build_message(seq, payload, sizeof(payload))) {
-    ESP_LOGW(TAG, "Failed to build message packet (A522)");
-    return std::vector<uint8_t>();
-  }
-  return std::vector<uint8_t>(send_buffer.data(), send_buffer.data() + send_buffer.size());
-}
-
-std::vector<uint8_t> CosoriKettleBLE::make_setpoint_(uint8_t seq, uint8_t mode, uint8_t temp_f) {
-  const uint8_t payload[] = {0x00, 0xF0, 0xA3, 0x00, mode, temp_f, 0x01, 0x10, 0x0E};
-  if (!send_buffer.build_message(seq, payload, sizeof(payload))) {
-    ESP_LOGW(TAG, "Failed to build message packet (A522)");
-    return std::vector<uint8_t>();
-  }
-  return std::vector<uint8_t>(send_buffer.data(), send_buffer.data() + send_buffer.size());
-}
-
-std::vector<uint8_t> CosoriKettleBLE::make_f4_(uint8_t seq) {
-  const uint8_t payload[] = {0x00, 0xF4, 0xA3, 0x00};
-  if (!send_buffer.build_message(seq, payload, sizeof(payload))) {
-    ESP_LOGW(TAG, "Failed to build message packet (A522)");
-    return std::vector<uint8_t>();
-  }
-  return std::vector<uint8_t>(send_buffer.data(), send_buffer.data() + send_buffer.size());
-}
-
-std::vector<uint8_t> CosoriKettleBLE::make_ctrl_(uint8_t seq) {
-  const uint8_t payload[] = {0x00, 0x41, 0x40, 0x00};
-  if (!send_buffer.build_ack(seq, payload, sizeof(payload))) {
-    ESP_LOGW(TAG, "Failed to build ACK packet (A512)");
-    return std::vector<uint8_t>();
-  }
-  return std::vector<uint8_t>(send_buffer.data(), send_buffer.data() + send_buffer.size());
-}
 
 // ============================================================================
 // Frame Processing
@@ -499,12 +504,9 @@ void CosoriKettleBLE::process_frame_buffer_() {
     this->last_rx_seq_ = frame.seq;
 
     // TODO: parse based on frame type AND command
-    // Parse based on frame type
     if (frame.frame_type == MESSAGE_HEADER_TYPE) {
-      // Message header (A522 = A5 + 22) - compact status
       this->parse_compact_status_(frame.payload, frame.payload_len);
     } else if (frame.frame_type == ACK_HEADER_TYPE) {
-      // ACK header (A512 = A5 + 12) - extended status
       this->parse_extended_status_(frame.payload, frame.payload_len);
     }
   }
@@ -836,23 +838,26 @@ void CosoriKettleBLE::process_command_state_machine_() {
       break;
 
     case CommandState::HANDSHAKE_PACKET_1: {
-      // Reconstruct complete hello packet from chunks
-      std::vector<uint8_t> complete_packet;
+      uint8_t payload[36];
+      payload[0] = 0x00; // TODO: use 0x01 for v1 devices
+      payload[1] = 0x81;
+      payload[2] = 0xD1;
+      payload[3] = 0x00;
       
-      if (this->use_custom_handshake_) {
-        // Concatenate custom handshake chunks
-        complete_packet.insert(complete_packet.end(), this->custom_hello_1_.begin(), this->custom_hello_1_.end());
-        complete_packet.insert(complete_packet.end(), this->custom_hello_2_.begin(), this->custom_hello_2_.end());
-        complete_packet.insert(complete_packet.end(), this->custom_hello_3_.begin(), this->custom_hello_3_.end());
-      } else {
-        // Concatenate default handshake chunks
-        complete_packet.insert(complete_packet.end(), HELLO_MIN_1, HELLO_MIN_1 + sizeof(HELLO_MIN_1));
-        complete_packet.insert(complete_packet.end(), HELLO_MIN_2, HELLO_MIN_2 + sizeof(HELLO_MIN_2));
-        complete_packet.insert(complete_packet.end(), HELLO_MIN_3, HELLO_MIN_3 + sizeof(HELLO_MIN_3));
+      // Convert 16-byte binary key to 32-byte ASCII hex
+      static const char hex_chars[] = "0123456789abcdef";
+      for (size_t i = 0; i < 16; i++) {
+        uint8_t byte = this->registration_key_[i];
+        payload[4 + i * 2] = hex_chars[(byte >> 4) & 0x0F];
+        payload[4 + i * 2 + 1] = hex_chars[byte & 0x0F];
       }
       
-      // Send complete packet (chunking will be handled automatically)
-      this->send_packet_(complete_packet.data(), complete_packet.size());
+      // Send hello command using send_command (seq=0 for hello)
+      if (!this->send_command(0, payload, sizeof(payload))) {
+        ESP_LOGW(TAG, "Failed to send hello command");
+        this->command_state_ = CommandState::IDLE;
+        break;
+      }
       
       // Wait for all chunks to be sent before proceeding to poll
       this->command_state_ = CommandState::HANDSHAKE_WAIT_CHUNKS;
