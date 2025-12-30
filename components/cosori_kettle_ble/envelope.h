@@ -79,7 +79,7 @@ class Envelope {
     buffer_[size_++] = seq;
     buffer_[size_++] = payload_len & 0xFF;           // len_lo
     buffer_[size_++] = (payload_len >> 8) & 0xFF;    // len_hi
-    buffer_[size_++] = calculate_checksum(frame_type, seq, payload_len);
+    buffer_[size_++] = 0x01;  // Default checksum to 0x01 (will be calculated later)
 
     // Append payload
     if (payload != nullptr && payload_len > 0) {
@@ -87,6 +87,9 @@ class Envelope {
         buffer_[size_++] = payload[i];
       }
     }
+
+    // Calculate and set checksum as the last thing
+    buffer_[5] = calculate_checksum(buffer_, size_);
 
     return true;
   }
@@ -177,6 +180,16 @@ class Envelope {
         return info;  // Frame not complete yet
       }
       
+      // Validate checksum over complete frame
+      // calculate_checksum treats checksum position as 0x01 internally
+      uint8_t calculated_checksum = calculate_checksum(buffer_ + pos_, frame_len);
+      
+      if (checksum != calculated_checksum) {
+        // Invalid checksum, advance by 1 byte and continue
+        pos_++;
+        continue;
+      }
+      
       // Extract payload
       const uint8_t *payload = buffer_ + pos_ + 6;
       
@@ -228,6 +241,7 @@ class Envelope {
   
   // Validate frame header at current position
   // Returns true if valid frame header exists, fills in frame info
+  // Note: Checksum validation is done separately after confirming frame is complete
   bool validate_frame_header_at_pos(uint8_t &frame_type, uint8_t &seq, 
                                      uint16_t &payload_len, uint8_t &checksum) const {
     if (pos_ + 6 > size_) {
@@ -243,13 +257,38 @@ class Envelope {
     payload_len = buffer_[pos_ + 3] | (buffer_[pos_ + 4] << 8);
     checksum = buffer_[pos_ + 5];
     
-    // Validate checksum
-    uint8_t calculated = calculate_checksum(frame_type, seq, payload_len);
-    return (checksum == calculated);
+    return true;
   }
 
-  // Calculate checksum for envelope header
-  static uint8_t calculate_checksum(uint8_t frame_type, uint8_t seq, uint16_t payload_len);
+  // Calculate checksum for envelope
+  // Detects protocol version from payload[0] (buffer[6]) and uses appropriate algorithm
+  // checksum_position: position of checksum byte (default 5), treated as 0x01 during calculation
+  static uint8_t calculate_checksum(const uint8_t *buffer, size_t buffer_len) {
+    // Detect protocol version from payload (first byte of payload is at buffer[6])
+    bool is_v1 = false;
+    if (buffer_len > 6) {
+      uint8_t version_byte = buffer[6];  // First byte of payload is the version
+      is_v1 = (version_byte == 0x01);
+    }
+    
+    if (is_v1) {
+      // v1 checksum: set checksum = 0, then for each byte: checksum = (checksum - byte) & 0xFF
+      // Treat checksum position (5) as 0x01
+      constexpr size_t CHECKSUM_POSITION = 5;
+      uint8_t checksum = 0;
+      for (size_t i = 0; i < buffer_len; i++) {
+        uint8_t byte = (i == CHECKSUM_POSITION) ? 0x01 : buffer[i];
+        checksum = (checksum - byte) & 0xFF;
+      }
+      return checksum;
+    } else {
+      // v0 checksum: (magic + type + seq + len_lo + len_hi) & 0xFF
+      if (buffer_len < 6) {
+        return 0;  // Invalid buffer
+      }
+      return (FRAME_MAGIC + buffer[1] + buffer[2] + buffer[3] + buffer[4]) & 0xFF;
+    }
+  }
 
   uint8_t buffer_[ENVELOPE_BUFFER_SIZE];
   size_t size_;  // Total data size
