@@ -603,61 +603,40 @@ void CosoriKettleBLE::parse_status_ack_(const uint8_t *payload, size_t len) {
   this->status_received_ = true;
   this->last_status_seq_ = this->last_rx_seq_;
 
-  // On-base detection
-  if (status.has_on_base) {
-    bool prev_on_base = this->on_base_;
-    this->on_base_ = status.on_base;
-    if (prev_on_base != this->on_base_) {
-      ESP_LOGI(TAG, "On-base: %s", this->on_base_ ? "ON" : "OFF");
-    }
+  bool prev_on_base = this->on_base_;
+  this->on_base_ = status.on_base;
+  if (prev_on_base != this->on_base_) {
+    ESP_LOGI(TAG, "On-base: %s", this->on_base_ ? "ON" : "OFF");
   }
 
-  // My temp
-  if (status.has_my_temp) {
-    if (this->pending_my_temp_) {
-      // Clear pending flag - device has processed our command
-      // Update value now that device has confirmed
-      this->pending_my_temp_ = false;
-      this->my_temp_f_ = status.my_temp;
-      ESP_LOGD(TAG, "My temp update confirmed: %d°F", status.my_temp);
-    } else {
-      // Not pending, safe to update from device
-      this->my_temp_f_ = status.my_temp;
-    }
+  if (this->pending_my_temp_) {
+    this->pending_my_temp_ = false;
+    this->my_temp_f_ = status.my_temp;
+    ESP_LOGD(TAG, "My temp update confirmed: %d°F", status.my_temp);
+  } else {
+    // Not pending, safe to update from device
+    this->my_temp_f_ = status.my_temp;
   }
 
-  // Hold time
-  if (status.has_hold_time) {
-    if (this->pending_hold_time_) {
-      // Clear pending flag - device has processed our command
-      // Update value now that device has confirmed
-      this->pending_hold_time_ = false;
-      this->hold_time_seconds_ = status.configured_hold_time;
-      ESP_LOGD(TAG, "Hold time update confirmed: %u seconds", status.configured_hold_time);
-    } else {
-      // Not pending, safe to update from device
-      this->hold_time_seconds_ = status.configured_hold_time;
-    }
+  if (this->pending_hold_time_) {
+    this->pending_hold_time_ = false;
+    this->hold_time_seconds_ = status.configured_hold_time;
+    ESP_LOGD(TAG, "Hold time update confirmed: %u seconds", status.configured_hold_time);
+  } else {
+    // Not pending, safe to update from device
+    this->hold_time_seconds_ = status.configured_hold_time;
   }
 
-  // Baby formula mode
-  if (status.has_baby_formula) {
-    if (this->pending_baby_formula_) {
-      // Clear pending flag - device has processed our command
-      // Update value now that device has confirmed
-      this->pending_baby_formula_ = false;
-      this->baby_formula_enabled_ = status.baby_formula_enabled;
-      ESP_LOGD(TAG, "Baby formula update confirmed: %s", status.baby_formula_enabled ? "enabled" : "disabled");
-    } else {
-      // Not pending, safe to update from device
-      this->baby_formula_enabled_ = status.baby_formula_enabled;
-    }
+  if (this->pending_baby_formula_) {
+    this->pending_baby_formula_ = false;
+    this->baby_formula_enabled_ = status.baby_formula_enabled;
+    ESP_LOGD(TAG, "Baby formula update confirmed: %s", status.baby_formula_enabled ? "enabled" : "disabled");
+  } else {
+    // Not pending, safe to update from device
+    this->baby_formula_enabled_ = status.baby_formula_enabled;
   }
 
-  // Reset offline counter
   this->reset_online_status_();
-
-  // Update entities
   this->update_entities_();
 }
 
@@ -893,50 +872,13 @@ uint8_t CosoriKettleBLE::next_tx_seq_() {
   return this->tx_seq_;
 }
 
-void CosoriKettleBLE::update_entities_() {
+void CosoriKettleBLE::update_sensors_() {
   if (this->temperature_sensor_ != nullptr) {
     this->temperature_sensor_->publish_state(this->current_temp_f_);
   }
 
   if (this->kettle_setpoint_sensor_ != nullptr) {
     this->kettle_setpoint_sensor_->publish_state(this->kettle_setpoint_f_);
-  }
-
-  // Initialize target setpoint number with kettle's setpoint on first status
-  if (this->target_setpoint_number_ != nullptr && !this->target_setpoint_number_->has_state()) {
-    this->target_setpoint_f_ = this->kettle_setpoint_f_;
-    this->target_setpoint_number_->publish_state(this->target_setpoint_f_);
-    ESP_LOGI(TAG, "Initialized target setpoint to %d°F from kettle", static_cast<int>(this->target_setpoint_f_));
-  }
-
-  // Update hold time number (use entity state to determine if initialized)
-  if (this->hold_time_number_ != nullptr) {
-    if (!this->hold_time_number_->has_state()) {
-      // Not initialized yet, initialize from device value (can be 0)
-      this->hold_time_number_->publish_state(static_cast<float>(this->hold_time_seconds_));
-      ESP_LOGI(TAG, "Initialized hold time to %u seconds from kettle", this->hold_time_seconds_);
-    } else {
-      // Already initialized, update from device
-      this->hold_time_number_->publish_state(static_cast<float>(this->hold_time_seconds_));
-    }
-  }
-
-  // Update my temp number (use entity state to determine if initialized)
-  if (this->my_temp_number_ != nullptr) {
-    if (!this->my_temp_number_->has_state() && this->my_temp_f_ > 0) {
-      // Not initialized yet, initialize from device value
-      this->my_temp_number_->publish_state(static_cast<float>(this->my_temp_f_));
-      ESP_LOGI(TAG, "Initialized my temp to %d°F from kettle", this->my_temp_f_);
-    } else if (this->my_temp_number_->has_state()) {
-      // Already initialized, update from device
-      this->my_temp_number_->publish_state(static_cast<float>(this->my_temp_f_));
-    }
-  }
-
-  // Update baby formula switch (use entity state to determine if initialized)
-  // Switches always have a state, so we just update them
-  if (this->baby_formula_switch_ != nullptr) {
-    this->baby_formula_switch_->publish_state(this->baby_formula_enabled_);
   }
 
   if (this->on_base_binary_sensor_ != nullptr) {
@@ -946,13 +888,39 @@ void CosoriKettleBLE::update_entities_() {
   if (this->heating_binary_sensor_ != nullptr) {
     this->heating_binary_sensor_->publish_state(this->heating_);
   }
+}
 
-  // Update heating switch state (without triggering action)
+void CosoriKettleBLE::update_mutable_entities_() {
+  if (this->command_state_ != CommandState::IDLE) {
+    return;
+  }
+
+  if (this->target_setpoint_number_ != nullptr) {
+    this->target_setpoint_number_->publish_state(this->target_setpoint_f_);
+  }
+
+  if (this->hold_time_number_ != nullptr && !this->pending_hold_time_) {
+    this->hold_time_number_->publish_state(static_cast<float>(this->hold_time_seconds_));
+  }
+
+  if (this->my_temp_number_ != nullptr && !this->pending_my_temp_) {
+    this->my_temp_number_->publish_state(static_cast<float>(this->my_temp_f_));
+  }
+
+  if (this->baby_formula_switch_ != nullptr && !this->pending_baby_formula_) {
+    this->baby_formula_switch_->publish_state(this->baby_formula_enabled_);
+  }
+
   if (this->heating_switch_ != nullptr) {
     this->heating_switch_->publish_state(this->heating_);
   }
 
-  // Update climate state
+  // TODO: add hold time remaining number
+}
+
+void CosoriKettleBLE::update_entities_() {
+  this->update_sensors_();
+  this->update_mutable_entities_();
   this->update_climate_state_();
 }
 
@@ -971,17 +939,10 @@ void CosoriKettleBLE::update_climate_state_() {
              this->target_setpoint_f_, this->target_temperature);
   }
 
-  // Update mode based on heating state and base status
-  if (!this->on_base_) {
-    // Off base - set to OFF mode
-    this->mode = climate::CLIMATE_MODE_OFF;
-    this->action = climate::CLIMATE_ACTION_IDLE;
-  } else if (this->heating_) {
-    // On base and heating
+  if (this->on_base_ && this->heating_) {
     this->mode = climate::CLIMATE_MODE_HEAT;
     this->action = climate::CLIMATE_ACTION_HEATING;
   } else {
-    // On base but not heating - set to OFF mode
     this->mode = climate::CLIMATE_MODE_OFF;
     this->action = climate::CLIMATE_ACTION_IDLE;
   }

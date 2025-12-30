@@ -174,6 +174,8 @@ class CosoriKettleBLE : public esphome::ble_client::BLEClientNode, public Pollin
   // State management
   uint8_t next_tx_seq_();
   void update_entities_();
+  void update_sensors_();
+  void update_mutable_entities_();
   void update_climate_state_();
   void track_online_status_();
   void reset_online_status_();
