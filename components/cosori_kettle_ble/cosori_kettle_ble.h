@@ -13,6 +13,7 @@
 #include <vector>
 #include <array>
 #include "envelope.h"
+#include "cosori_kettle_state.h"
 
 namespace esphome {
 namespace cosori_kettle_ble {
@@ -76,73 +77,13 @@ class CosoriKettleBLE : public esphome::ble_client::BLEClientNode, public Pollin
   uint16_t tx_char_handle_{0};
   uint16_t notify_handle_{0};
 
-  // Protocol state
-  uint8_t last_rx_seq_{0};
-  uint8_t tx_seq_{0};
-  uint8_t last_ack_error_code_{0};
-  bool waiting_for_ack_complete_{false};
-  uint8_t waiting_for_ack_seq_{0};
-  uint8_t last_status_seq_{0};
-  bool status_received_{false};
-  
-  // Static buffers to avoid heap allocations
-  static Envelope send_buffer;
-  static Envelope recv_buffer;
-
-  // Chunking state for large packets (using send_buffer position/length tracking)
-  size_t send_chunk_index_{0};
-  size_t send_total_chunks_{0};
-  bool waiting_for_write_ack_{false};
-
-  // Kettle state
-  float current_temp_f_{0.0};
-  float kettle_setpoint_f_{0.0};
-  float target_setpoint_f_{212.0};
-  uint16_t hold_time_seconds_{0};
-  uint16_t remaining_hold_time_seconds_{0};
-  uint8_t my_temp_f_{179};
-  bool baby_formula_enabled_{false};
-  bool on_base_{false};
-  bool heating_{false};
+  // Kettle state (platform-independent logic)
+  CosoriKettleState kettle_state_;
 
   // Connection management
   bool ble_enabled_{true};
-  uint8_t no_response_count_{0};
   bool registration_sent_{false};
-  
-  // Pending update flags (ignore status updates while pending)
-  bool pending_hold_time_{false};
-  bool pending_my_temp_{false};
-  bool pending_baby_formula_{false};
-
-  // Command sequence state machine
-  enum class CommandState {
-    IDLE,
-    HANDSHAKE_START,
-    HANDSHAKE_WAIT_CHUNKS,
-    HANDSHAKE_POLL,
-    HEAT_START,
-    HEAT_SET_TEMP,
-    HEAT_POLL,
-    HEAT_POLL_REPEAT,
-    HEAT_COMPLETE,
-    STOP,
-    STOP_POLL,
-    STOP_REPEAT
-  };
-  
-  CommandState command_state_{CommandState::IDLE};
-  uint32_t command_state_time_{0};
-  uint8_t pending_mode_{0};
-  uint8_t pending_temp_f_{0};
   bool use_register_command_{false};  // Flag to use register (0x80) vs hello (0x81)
-
-  // Registration key (16 bytes) for hello/reconnect command
-  std::array<uint8_t, 16> registration_key_{};
-  bool registration_key_set_{false};
-  
-  // Protocol version (0 or 1)
-  uint8_t protocol_version_{0};
 
   // Entity pointers
   sensor::Sensor *temperature_sensor_{nullptr};
@@ -158,36 +99,14 @@ class CosoriKettleBLE : public esphome::ble_client::BLEClientNode, public Pollin
   switch_::Switch *baby_formula_switch_{nullptr};
   switch_::Switch *register_switch_{nullptr};
 
-  // Protocol methods
-  void send_hello_();
-  void send_register_();
-  void send_status_request_();
-  void send_set_hold_time(uint16_t seconds);
-  void send_set_my_temp(uint8_t temp_f);
-  void send_set_baby_formula(bool enabled);
-  void send_set_mode(uint8_t mode, uint8_t temp_f);
-  void send_stop();
-  void send_request_compact_status_(uint8_t seq_base);
-  void send_packet_(const uint8_t *data, size_t len);
-  void send_next_chunk_();
-  
-  // Send command with payload (updates envelope directly)
-  bool send_command(uint8_t seq, const uint8_t *payload, size_t payload_len, bool is_ack = false);
+  // Platform-specific methods
+  void send_ble_data_(const uint8_t* data, size_t len);
 
-  // Frame parsing
-  void process_frame_buffer_();
-  void parse_compact_status_(const uint8_t *payload, size_t len);
-  void parse_status_ack_(const uint8_t *payload, size_t len);
-
-  // State management
-  uint8_t next_tx_seq_();
+  // Entity update methods
   void update_entities_();
   void update_sensors_();
   void update_mutable_entities_();
   void update_climate_state_();
-  void track_online_status_();
-  void reset_online_status_();
-  void process_command_state_machine_();
 };
 
 // ============================================================================
