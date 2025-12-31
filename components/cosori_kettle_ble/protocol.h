@@ -50,7 +50,6 @@ struct CompactStatus {
   uint8_t mode;       // Operating mode
   uint8_t setpoint;   // Setpoint temperature (°F)
   uint8_t temp;       // Current temperature (°F)
-  uint8_t status;     // Heating status
   bool valid;         // Whether the status is valid
 };
 

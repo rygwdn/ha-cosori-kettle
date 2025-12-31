@@ -15,7 +15,7 @@ using namespace esphome::cosori_kettle_ble;
 std::vector<uint8_t> hex_to_bytes(const std::string& hex) {
     std::vector<uint8_t> bytes;
     for (size_t i = 0; i < hex.length(); i += 2) {
-        while (hex[i] == ' ') {
+        while (hex[i] == ' ' || hex[i] == ':') {
           i++;
         }
         std::string byte_str = hex.substr(i, 2);
@@ -476,6 +476,45 @@ std::vector<uint8_t> parseEnvelope(const std::string& message) {
 void test_protocol_parse() {
     std::cout << "Testing protocol parsing...\n";
     
+    {
+      auto frame = parseEnvelope("a5:22:0b:0c:00:4b 01:41:40:00 01:04:d4:7b:00:00:00:00");
+      auto ex_frame = parseEnvelope("a5:12:18:1d:00:a2:01:40:40:00:01:04:d4:7b:8c:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:08:07:00:00:01");
+      CompactStatus status = parse_compact_status(frame.data(), frame.size());
+      ExtendedStatus ex_status = parse_extended_status(ex_frame.data(), ex_frame.size());
+      
+      // std::cout << "status.valid: " << (status.valid ? "true" : "false") << std::endl;
+      // std::cout << "ex_status.valid: " << (ex_status.valid ? "true" : "false") << std::endl;
+
+      // std::cout << "status.stage: " << static_cast<int>(status.stage) << std::endl;
+      // std::cout << "ex_status.stage: " << static_cast<int>(ex_status.stage) << std::endl;
+
+      // std::cout << "status.mode: " << static_cast<int>(status.mode) << std::endl;
+      // std::cout << "ex_status.mode: " << static_cast<int>(ex_status.mode) << std::endl;
+      
+      // std::cout << "status.setpoint: " << static_cast<int>(status.setpoint) << std::endl;
+      // std::cout << "ex_status.setpoint: " << static_cast<int>(ex_status.setpoint) << std::endl;
+      
+      // std::cout << "status.temp: " << static_cast<int>(status.temp) << std::endl;
+      // std::cout << "ex_status.temp: " << static_cast<int>(ex_status.temp) << std::endl;
+      
+      assert(status.valid);
+      assert(ex_status.valid);
+
+      assert(status.stage == 0x01);
+      assert(ex_status.stage == 0x01);
+
+      assert(status.mode == 0x04);
+      assert(ex_status.mode == 0x04);
+      
+      assert(status.setpoint == 212);
+      assert(ex_status.setpoint == 212);
+
+      assert(status.temp == 123);
+      assert(ex_status.temp == 123);
+
+      std::cout << "  ✓ Parse compact status\n";
+    }
+    
     // Parse compact status (A522 B50C 00B3 0141 4000 0000 B38F 0000 0000)
     {
         auto frame = parseEnvelope("A522 B50C00B3 01414000 00 00 B3 8F 00 00 00 00");
@@ -485,7 +524,6 @@ void test_protocol_parse() {
         assert(status.mode == 0x00);   // IDLE
         assert(status.setpoint == 0xB3);  // 179°F
         assert(status.temp == 0x8F);   // 143°F
-        assert(status.status == 0x00);
         
         std::cout << "  ✓ Parse compact status\n";
     }
@@ -500,7 +538,6 @@ void test_protocol_parse() {
         // std::cout << "status.mode: " << static_cast<int>(status.mode) << std::endl;
         // std::cout << "status.setpoint: " << static_cast<int>(status.setpoint) << std::endl;
         // std::cout << "status.temp: " << static_cast<int>(status.temp) << std::endl;
-        // std::cout << "status.status: " << static_cast<int>(status.status) << std::endl;
         
         assert(status.valid);
         assert(status.setpoint == 0xAF);  // 175°F
@@ -518,7 +555,6 @@ void test_protocol_parse() {
         assert(status.mode == 0x01);   // GREEN_TEA (180°F)
         assert(status.setpoint == 0xB4);  // 180°F
         assert(status.temp == 0x6F);   // 111°F
-        assert(status.status == 0x00);
         
         std::cout << "  ✓ Parse compact status (heating)\n";
     }

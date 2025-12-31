@@ -168,7 +168,7 @@ size_t build_stop_payload(uint8_t protocol_version, uint8_t *payload) {
 // ============================================================================
 
 CompactStatus parse_compact_status(const uint8_t *payload, size_t len) {
-  CompactStatus status = {0, 0, 0, 0, 0, false};
+  CompactStatus status = {0, 0, 0, 0, 0};
   
   // Compact status: 01 41 40 00 <stage> <mode> <sp> <temp> <status> ...
   if (len < 9 || payload[1] != CMD_CTRL) {
@@ -186,7 +186,6 @@ CompactStatus parse_compact_status(const uint8_t *payload, size_t len) {
   status.mode = payload[5];      // Mode
   status.setpoint = payload[6];        // Setpoint temperature
   status.stage = payload[4];     // Heating stage
-  status.status = payload[8]; // Heating status
   status.valid = true;
   
   return status;

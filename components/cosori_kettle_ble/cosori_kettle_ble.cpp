@@ -298,7 +298,7 @@ void CosoriKettleBLE::send_status_request_() {
     ESP_LOGW(TAG, "Failed to build POLL payload");
     return;
   }
-  ESP_LOGV(TAG, "Sending POLL (seq=%02x)", seq);
+  ESP_LOGI(TAG, "Sending POLL (seq=%02x)", seq);
   if (!this->send_command(seq, payload, payload_len)) {
     ESP_LOGW(TAG, "Failed to send POLL");
   }
@@ -317,7 +317,7 @@ void CosoriKettleBLE::send_set_my_temp(uint8_t temp_f) {
     ESP_LOGW(TAG, "Failed to build set my temp payload");
     return;
   }
-  ESP_LOGD(TAG, "Sending set my temp %d°F (seq=%02x)", temp_f, seq);
+  ESP_LOGI(TAG, "Sending set my temp %d°F (seq=%02x)", temp_f, seq);
   if (!this->send_command(seq, payload, payload_len)) {
     ESP_LOGW(TAG, "Failed to send set my temp");
   }
@@ -336,7 +336,7 @@ void CosoriKettleBLE::send_set_baby_formula(bool enabled) {
     ESP_LOGW(TAG, "Failed to build set baby formula payload");
     return;
   }
-  ESP_LOGD(TAG, "Sending set baby formula %s (seq=%02x)", enabled ? "enabled" : "disabled", seq);
+  ESP_LOGI(TAG, "Sending set baby formula %s (seq=%02x)", enabled ? "enabled" : "disabled", seq);
   if (!this->send_command(seq, payload, payload_len)) {
     ESP_LOGW(TAG, "Failed to send set baby formula");
   }
@@ -355,7 +355,7 @@ void CosoriKettleBLE::send_set_hold_time(uint16_t seconds) {
     ESP_LOGW(TAG, "Failed to build set hold time payload");
     return;
   }
-  ESP_LOGD(TAG, "Sending set hold time %u seconds (seq=%02x)", seconds, seq);
+  ESP_LOGI(TAG, "Sending set hold time %u seconds (seq=%02x)", seconds, seq);
   if (!this->send_command(seq, payload, payload_len)) {
     ESP_LOGW(TAG, "Failed to send set hold time");
   }
@@ -384,7 +384,7 @@ void CosoriKettleBLE::send_set_mode(uint8_t mode, uint8_t temp_f) {
     ESP_LOGW(TAG, "Failed to build set mode payload");
     return;
   }
-  ESP_LOGD(TAG, "Sending SETPOINT %d°F (seq=%02x, mode=%02x)", temp_f, seq, mode);
+  ESP_LOGI(TAG, "Sending SETPOINT %d°F (seq=%02x, mode=%02x)", temp_f, seq, mode);
   if (!this->send_command(seq, payload, payload_len)) {
     ESP_LOGW(TAG, "Failed to send SETPOINT");
   }
@@ -392,7 +392,7 @@ void CosoriKettleBLE::send_set_mode(uint8_t mode, uint8_t temp_f) {
 
 void CosoriKettleBLE::send_stop() {
   if (!this->is_connected()) {
-    ESP_LOGW(TAG, "Cannot send F4: not connected");
+    ESP_LOGW(TAG, "Cannot send STOP: not connected");
     return;
   }
   
@@ -403,15 +403,15 @@ void CosoriKettleBLE::send_stop() {
     ESP_LOGW(TAG, "Failed to build stop payload");
     return;
   }
-  ESP_LOGD(TAG, "Sending F4 (seq=%02x)", seq);
+  ESP_LOGI(TAG, "Sending STOP (seq=%02x)", seq);
   if (!this->send_command(seq, payload, payload_len)) {
-    ESP_LOGW(TAG, "Failed to send F4");
+    ESP_LOGW(TAG, "Failed to send STOP");
   }
 }
 
 void CosoriKettleBLE::send_request_compact_status_(uint8_t seq_base) {
   if (!this->is_connected()) {
-    ESP_LOGW(TAG, "Cannot send CTRL: not connected");
+    ESP_LOGW(TAG, "Cannot send request compact status: not connected");
     return;
   }
   
@@ -421,9 +421,9 @@ void CosoriKettleBLE::send_request_compact_status_(uint8_t seq_base) {
     ESP_LOGW(TAG, "Failed to build compact status request payload");
     return;
   }
-  ESP_LOGD(TAG, "Sending CTRL (seq=%02x)", seq_base);
+  ESP_LOGI(TAG, "Sending request compact status (seq=%02x)", seq_base);
   if (!this->send_command(seq_base, payload, payload_len, true)) {
-    ESP_LOGW(TAG, "Failed to send CTRL");
+    ESP_LOGW(TAG, "Failed to send request compact status");
   }
 }
 
@@ -432,10 +432,6 @@ void CosoriKettleBLE::send_request_compact_status_(uint8_t seq_base) {
 // ============================================================================
 
 bool CosoriKettleBLE::send_command(uint8_t seq, const uint8_t *payload, size_t payload_len, bool is_ack) {
-  // if (esp_log_level_get(TAG) >= ESP_LOG_DEBUG) {
-    // ESP_LOGD(TAG, "Sending command: seq=%02x, payload=%s", seq, bytes_to_hex_string(payload, payload_len).c_str());
-  // }
-
   if (this->tx_char_handle_ == 0) {
     ESP_LOGW(TAG, "TX characteristic not ready");
     return false;
@@ -465,11 +461,6 @@ bool CosoriKettleBLE::send_command(uint8_t seq, const uint8_t *payload, size_t p
     return false;
   }
 
-  // Log full TX packet as hex dump (only when DEBUG level is enabled)
-  // if (esp_log_level_get(TAG) >= ESP_LOG_DEBUG) {
-    // ESP_LOGD(TAG, "TX: %s", bytes_to_hex_string(send_buffer.data(), send_buffer.size()).c_str());
-  // }
-
   // Calculate total chunks needed
   this->send_total_chunks_ = send_buffer.get_chunk_count();
   
@@ -485,47 +476,6 @@ bool CosoriKettleBLE::send_command(uint8_t seq, const uint8_t *payload, size_t p
   // Send first chunk immediately
   this->send_next_chunk_();
   return true;
-}
-
-void CosoriKettleBLE::send_packet_(const uint8_t *data, size_t len) {
-  if (this->tx_char_handle_ == 0) {
-    ESP_LOGW(TAG, "TX characteristic not ready");
-    return;
-  }
-
-  // Check if already sending something or waiting
-  if (this->waiting_for_write_ack_ || (this->send_chunk_index_ < this->send_total_chunks_)) {
-    ESP_LOGW(TAG, "Cannot send packet: already sending (chunk %zu/%zu, waiting=%d)",
-             this->send_chunk_index_, this->send_total_chunks_, this->waiting_for_write_ack_);
-    return;
-  }
-
-  // Copy data to send_buffer (for raw packets like handshake)
-  send_buffer.clear();
-  if (!send_buffer.append(data, len)) {
-    ESP_LOGW(TAG, "Failed to append data to send buffer");
-    return;
-  }
-
-  // Log full TX packet as hex dump (only when DEBUG level is enabled)
-  // if (esp_log_level_get(TAG) >= ESP_LOG_DEBUG) {
-    // ESP_LOGD(TAG, "TX: %s", bytes_to_hex_string(data, len).c_str());
-  // }
-  
-  // Calculate total chunks needed
-  this->send_total_chunks_ = send_buffer.get_chunk_count();
-  
-  if (this->send_total_chunks_ == 0) {
-    ESP_LOGW(TAG, "No chunks to send");
-    return;
-  }
-
-  // Reset chunking state
-  this->send_chunk_index_ = 0;
-  this->waiting_for_write_ack_ = false;
-
-  // Send first chunk immediately
-  this->send_next_chunk_();
 }
 
 void CosoriKettleBLE::send_next_chunk_() {
@@ -622,17 +572,13 @@ void CosoriKettleBLE::parse_compact_status_(const uint8_t *payload, size_t len) 
     return;
   }
 
-  // Update state (temp, setpoint, heating only - no on-base detection from compact packets)
   this->current_temp_f_ = status.temp;
   this->kettle_setpoint_f_ = status.setpoint;
-  this->heating_ = (status.status != 0);
+  this->heating_ = (status.stage != 0);
   this->status_received_ = true;
   this->last_status_seq_ = this->last_rx_seq_;
 
-  // Reset offline counter
   this->reset_online_status_();
-
-  // Update entities
   this->update_entities_();
 }
 
@@ -642,7 +588,6 @@ void CosoriKettleBLE::parse_status_ack_(const uint8_t *payload, size_t len) {
     return;
   }
 
-  // Update state (temp, setpoint, heating)
   this->current_temp_f_ = status.temp;
   this->kettle_setpoint_f_ = status.setpoint;
   this->heating_ = (status.stage != 0);
@@ -801,11 +746,11 @@ void CosoriKettleBLE::start_heating() {
 
   if (this->protocol_version_ == 1 && mode == MODE_HEAT) {
     // V1 doesn't support MODE_HEAT, so we need to use mytemp or set mode first
-    if (temp_f == MODE_GREEN_TEA_F) {
+    if (temp_f < MODE_GREEN_TEA_F + 2 && temp_f > MODE_GREEN_TEA_F - 2) {
       mode = MODE_GREEN_TEA;
-    } else if (temp_f == MODE_OOLONG_F) {
+    } else if (temp_f < MODE_OOLONG_F + 2 && temp_f > MODE_OOLONG_F - 2) {
       mode = MODE_OOLONG;
-    } else if (temp_f == MODE_COFFEE_F) {
+    } else if (temp_f < MODE_COFFEE_F + 2 && temp_f > MODE_COFFEE_F - 2) {
       mode = MODE_COFFEE;
     } else {
       mode = MODE_MY_TEMP;
@@ -813,7 +758,7 @@ void CosoriKettleBLE::start_heating() {
     }
   }
 
-  ESP_LOGI(TAG, "Starting kettle at %.0f°F", this->target_setpoint_f_);
+  ESP_LOGI(TAG, "Starting kettle at %.0f°F using mode %d", this->target_setpoint_f_, mode);
 
   // Store parameters and start state machine
   this->pending_temp_f_ = temp_f;
@@ -1160,7 +1105,6 @@ void CosoriKettleBLE::process_command_state_machine_() {
     case CommandState::HEAT_SET_TEMP:
       if (elapsed >= PRE_SETPOINT_DELAY_MS) {
         if (this->protocol_version_ != 1 || this->pending_mode_ != MODE_MY_TEMP) {
-          // Can use custom temp mode for v0
           this->command_state_ = CommandState::HEAT_START;
           break;
         }
