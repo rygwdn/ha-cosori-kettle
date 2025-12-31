@@ -8,6 +8,29 @@ namespace cosori_kettle_ble {
 // Packet Generation Functions
 // ============================================================================
 
+size_t build_register_payload(uint8_t protocol_version, 
+                               const std::array<uint8_t, 16> &registration_key,
+                               uint8_t *payload) {
+  if (payload == nullptr) {
+    return 0;
+  }
+
+  payload[0] = protocol_version;
+  payload[1] = CMD_REGISTER;
+  payload[2] = CMD_TYPE_D1;
+  payload[3] = 0x00;
+  
+  // Convert 16-byte binary key to 32-byte ASCII hex
+  static const char hex_chars[] = "0123456789abcdef";
+  for (size_t i = 0; i < 16; i++) {
+    uint8_t byte = registration_key[i];
+    payload[4 + i * 2] = hex_chars[(byte >> 4) & 0x0F];
+    payload[4 + i * 2 + 1] = hex_chars[byte & 0x0F];
+  }
+  
+  return 36;  // 4-byte header + 32-byte hex key
+}
+
 size_t build_hello_payload(uint8_t protocol_version, 
                            const std::array<uint8_t, 16> &registration_key,
                            uint8_t *payload) {

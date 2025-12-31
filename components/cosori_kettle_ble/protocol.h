@@ -12,6 +12,7 @@ static constexpr uint8_t PROTOCOL_VERSION_V0 = 0x00;
 static constexpr uint8_t PROTOCOL_VERSION_V1 = 0x01;
 
 // Command IDs
+static constexpr uint8_t CMD_REGISTER = 0x80;
 static constexpr uint8_t CMD_HELLO = 0x81;
 static constexpr uint8_t CMD_POLL = 0x40;
 static constexpr uint8_t CMD_CTRL = 0x41;
@@ -71,7 +72,18 @@ struct ExtendedStatus {
 // ============================================================================
 
 /**
- * Build hello/registration payload
+ * Build register/pairing payload
+ * @param protocol_version Protocol version (0 or 1)
+ * @param registration_key 16-byte registration key
+ * @param payload Output buffer (must be at least 36 bytes)
+ * @return Size of payload, or 0 on error
+ */
+size_t build_register_payload(uint8_t protocol_version, 
+                              const std::array<uint8_t, 16> &registration_key,
+                              uint8_t *payload);
+
+/**
+ * Build hello/reconnect payload
  * @param protocol_version Protocol version (0 or 1)
  * @param registration_key 16-byte registration key
  * @param payload Output buffer (must be at least 36 bytes)

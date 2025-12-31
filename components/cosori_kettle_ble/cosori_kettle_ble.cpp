@@ -79,6 +79,7 @@ void CosoriKettleBLE::dump_config() {
   LOG_SWITCH("  ", "Heating Control", this->heating_switch_);
   LOG_SWITCH("  ", "BLE Connection", this->ble_connection_switch_);
   LOG_SWITCH("  ", "Baby Formula", this->baby_formula_switch_);
+  LOG_BUTTON("  ", "Register", this->register_button_);
 }
 
 void CosoriKettleBLE::update() {
@@ -245,7 +246,22 @@ void CosoriKettleBLE::send_hello_() {
   }
   
   // Start handshake state machine instead of blocking
-  ESP_LOGI(TAG, "Starting registration handshake");
+  this->use_register_command_ = false;
+  ESP_LOGI(TAG, "Starting registration handshake (hello)");
+  this->command_state_ = CommandState::HANDSHAKE_START;
+  this->command_state_time_ = millis();
+}
+
+void CosoriKettleBLE::send_register_() {
+  // Verify registration key is set
+  if (!this->registration_key_set_) {
+    ESP_LOGE(TAG, "Registration key not set - cannot send register command");
+    return;
+  }
+  
+  // Start handshake state machine with register flag set
+  this->use_register_command_ = true;
+  ESP_LOGI(TAG, "Starting device registration (register)");
   this->command_state_ = CommandState::HANDSHAKE_START;
   this->command_state_time_ = millis();
 }
@@ -670,7 +686,16 @@ void CosoriKettleBLE::set_target_setpoint(float temp_f) {
   }
 }
 
-// TODO: add "register" command based on "hello" that sends the registration command (0x81 instead of 0x80)
+void CosoriKettleBLE::register_device() {
+  if (!this->is_connected()) {
+    ESP_LOGW(TAG, "Cannot register device: not connected");
+    return;
+  }
+
+  ESP_LOGI(TAG, "Registering device with kettle");
+  this->send_register_();
+}
+
 // TODO: add - delay start: 01F1 A300 {2b delay in seconds} {set mode payload}
 
 void CosoriKettleBLE::set_hold_time(float seconds) {
@@ -1033,19 +1058,33 @@ void CosoriKettleBLE::process_command_state_machine_() {
 
     case CommandState::HANDSHAKE_START: {
       uint8_t payload[36];
-      size_t payload_len = build_hello_payload(this->protocol_version_, 
-                                                 this->registration_key_,
-                                                 payload);
-      if (payload_len == 0) {
-        ESP_LOGW(TAG, "Failed to build hello payload");
-        this->command_state_ = CommandState::IDLE;
-        break;
+      size_t payload_len;
+      
+      // Use register or hello command based on flag
+      if (this->use_register_command_) {
+        payload_len = build_register_payload(this->protocol_version_, 
+                                             this->registration_key_,
+                                             payload);
+        if (payload_len == 0) {
+          ESP_LOGW(TAG, "Failed to build register payload");
+          this->command_state_ = CommandState::IDLE;
+          break;
+        }
+      } else {
+        payload_len = build_hello_payload(this->protocol_version_, 
+                                             this->registration_key_,
+                                             payload);
+        if (payload_len == 0) {
+          ESP_LOGW(TAG, "Failed to build hello payload");
+          this->command_state_ = CommandState::IDLE;
+          break;
+        }
       }
       
-      // Send hello command using send_command (seq=0 for hello)
+      // Send command using send_command (seq=0 for handshake)
       const uint8_t sequence_number = 0;
       if (!this->send_command(sequence_number, payload, payload_len)) {
-        ESP_LOGW(TAG, "Failed to send hello command");
+        ESP_LOGW(TAG, "Failed to send %s command", this->use_register_command_ ? "register" : "hello");
         this->command_state_ = CommandState::IDLE;
         break;
       }
@@ -1069,14 +1108,14 @@ void CosoriKettleBLE::process_command_state_machine_() {
     case CommandState::HANDSHAKE_POLL:
       if (elapsed >= HANDSHAKE_TIMEOUT_MS || !this->waiting_for_ack_complete_) {
         if (this->last_ack_error_code_ != 0) {
-          ESP_LOGE(TAG, "Error in handshake: %d", this->last_ack_error_code_);
+          ESP_LOGE(TAG, "Error in %s: %d", this->use_register_command_ ? "registration" : "handshake", this->last_ack_error_code_);
           this->command_state_ = CommandState::IDLE;
           break;
         }
 
         this->send_status_request_();
         this->command_state_ = CommandState::IDLE;
-        ESP_LOGI(TAG, "Registration handshake complete");
+        ESP_LOGI(TAG, "%s complete", this->use_register_command_ ? "Device registration" : "Registration handshake");
       }
       break;
 

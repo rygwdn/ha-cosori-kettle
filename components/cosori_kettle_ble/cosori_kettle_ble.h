@@ -6,6 +6,7 @@
 #include "esphome/components/binary_sensor/binary_sensor.h"
 #include "esphome/components/number/number.h"
 #include "esphome/components/switch/switch.h"
+#include "esphome/components/button/button.h"
 #include "esphome/components/climate/climate.h"
 
 #ifdef USE_ESP32
@@ -44,8 +45,11 @@ class CosoriKettleBLE : public esphome::ble_client::BLEClientNode, public Pollin
   void set_heating_switch(switch_::Switch *sw) { heating_switch_ = sw; }
   void set_ble_connection_switch(switch_::Switch *sw) { ble_connection_switch_ = sw; }
   void set_baby_formula_switch(switch_::Switch *sw) { baby_formula_switch_ = sw; }
+  
+  // Button setters
+  void set_register_button(button::Button *btn) { register_button_ = btn; }
 
-  // Public control methods (called by switches/numbers)
+  // Public control methods (called by switches/numbers/buttons)
   void set_target_setpoint(float temp_f);
   void set_hold_time(float seconds);
   void set_my_temp(float temp_f);
@@ -53,6 +57,7 @@ class CosoriKettleBLE : public esphome::ble_client::BLEClientNode, public Pollin
   void start_heating();
   void stop_heating();
   void enable_ble_connection(bool enable);
+  void register_device();
 
   // Connection state queries
   bool is_connected() const { return this->node_state == esp32_ble_tracker::ClientState::ESTABLISHED; }
@@ -133,6 +138,7 @@ class CosoriKettleBLE : public esphome::ble_client::BLEClientNode, public Pollin
   uint32_t command_state_time_{0};
   uint8_t pending_mode_{0};
   uint8_t pending_temp_f_{0};
+  bool use_register_command_{false};  // Flag to use register (0x80) vs hello (0x81)
 
   // Registration key (16 bytes) for hello/reconnect command
   std::array<uint8_t, 16> registration_key_{};
@@ -153,9 +159,11 @@ class CosoriKettleBLE : public esphome::ble_client::BLEClientNode, public Pollin
   switch_::Switch *heating_switch_{nullptr};
   switch_::Switch *ble_connection_switch_{nullptr};
   switch_::Switch *baby_formula_switch_{nullptr};
+  button::Button *register_button_{nullptr};
 
   // Protocol methods
   void send_hello_();
+  void send_register_();
   void send_status_request_();
   void send_set_hold_time(uint16_t seconds);
   void send_set_my_temp(uint8_t temp_f);
@@ -281,6 +289,20 @@ class CosoriKettleBabyFormulaSwitch : public switch_::Switch, public Component {
 
     this->parent_->set_baby_formula_enabled(state);
     // Note: Don't call publish_state here - the parent will update us via the status frames
+  }
+
+  CosoriKettleBLE *parent_{nullptr};
+};
+
+class CosoriKettleRegisterButton : public button::Button, public Component {
+ public:
+  void set_parent(CosoriKettleBLE *parent) { this->parent_ = parent; }
+
+ protected:
+  void press_action() override {
+    if (this->parent_ != nullptr) {
+      this->parent_->register_device();
+    }
   }
 
   CosoriKettleBLE *parent_{nullptr};

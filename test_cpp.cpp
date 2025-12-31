@@ -316,6 +316,149 @@ void test_protocol_build() {
         std::cout << "  ✓ Build set hold time payload\n";
     }
     
+    // Test 10: Build register payload (pairing mode - 0x80)
+    {
+        // Test with a known registration key
+        // Key: 9903e01a3c3baa8f6c71cbb5167e7d5f (16 bytes)
+        std::array<uint8_t, 16> reg_key = {
+            0x99, 0x03, 0xe0, 0x1a, 0x3c, 0x3b, 0xaa, 0x8f,
+            0x6c, 0x71, 0xcb, 0xb5, 0x16, 0x7e, 0x7d, 0x5f
+        };
+        
+        size_t len = build_register_payload(PROTOCOL_VERSION_V1, reg_key, payload);
+        assert(len == 36);  // 4-byte header + 32-byte hex key
+        
+        // Verify header
+        assert(payload[0] == PROTOCOL_VERSION_V1);  // 0x01
+        assert(payload[1] == 0x80);  // CMD_REGISTER
+        assert(payload[2] == 0xD1);  // CMD_TYPE_D1
+        assert(payload[3] == 0x00);  // padding
+        
+        // Verify hex encoding of key (32 bytes ASCII hex)
+        // 9903e01a3c3baa8f6c71cbb5167e7d5f
+        const char* expected_hex = "9903e01a3c3baa8f6c71cbb5167e7d5f";
+        for (size_t i = 0; i < 32; i++) {
+            assert(payload[4 + i] == expected_hex[i]);
+        }
+        
+        std::cout << "  ✓ Build register payload (0x80)\n";
+    }
+    
+    // Test 11: Build hello payload (reconnect - 0x81)
+    {
+        // Test with the same registration key
+        std::array<uint8_t, 16> reg_key = {
+            0x99, 0x03, 0xe0, 0x1a, 0x3c, 0x3b, 0xaa, 0x8f,
+            0x6c, 0x71, 0xcb, 0xb5, 0x16, 0x7e, 0x7d, 0x5f
+        };
+        
+        size_t len = build_hello_payload(PROTOCOL_VERSION_V1, reg_key, payload);
+        assert(len == 36);  // 4-byte header + 32-byte hex key
+        
+        // Verify header
+        assert(payload[0] == PROTOCOL_VERSION_V1);  // 0x01
+        assert(payload[1] == 0x81);  // CMD_HELLO
+        assert(payload[2] == 0xD1);  // CMD_TYPE_D1
+        assert(payload[3] == 0x00);  // padding
+        
+        // Verify hex encoding of key (32 bytes ASCII hex)
+        const char* expected_hex = "9903e01a3c3baa8f6c71cbb5167e7d5f";
+        for (size_t i = 0; i < 32; i++) {
+            assert(payload[4 + i] == expected_hex[i]);
+        }
+        
+        std::cout << "  ✓ Build hello payload (0x81)\n";
+    }
+    
+    // Test 12: Register vs Hello command ID difference
+    {
+        std::array<uint8_t, 16> reg_key = {
+            0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0,
+            0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88
+        };
+        
+        uint8_t register_payload[36];
+        uint8_t hello_payload[36];
+        
+        size_t reg_len = build_register_payload(PROTOCOL_VERSION_V1, reg_key, register_payload);
+        size_t hello_len = build_hello_payload(PROTOCOL_VERSION_V1, reg_key, hello_payload);
+        
+        assert(reg_len == 36);
+        assert(hello_len == 36);
+        
+        // Both should have same structure except command ID
+        assert(register_payload[0] == hello_payload[0]);  // version
+        assert(register_payload[1] == 0x80);  // REGISTER
+        assert(hello_payload[1] == 0x81);   // HELLO
+        assert(register_payload[2] == hello_payload[2]);  // type
+        assert(register_payload[3] == hello_payload[3]);  // padding
+        
+        // Hex encoding should be identical
+        for (size_t i = 4; i < 36; i++) {
+            assert(register_payload[i] == hello_payload[i]);
+        }
+        
+        std::cout << "  ✓ Register (0x80) vs Hello (0x81) command ID difference\n";
+    }
+    
+    // Test 13: Test with null payload pointer (error handling)
+    {
+        std::array<uint8_t, 16> reg_key = {
+            0x99, 0x03, 0xe0, 0x1a, 0x3c, 0x3b, 0xaa, 0x8f,
+            0x6c, 0x71, 0xcb, 0xb5, 0x16, 0x7e, 0x7d, 0x5f
+        };
+        
+        size_t len = build_register_payload(PROTOCOL_VERSION_V1, reg_key, nullptr);
+        assert(len == 0);  // Should return 0 on error
+        
+        len = build_hello_payload(PROTOCOL_VERSION_V1, reg_key, nullptr);
+        assert(len == 0);  // Should return 0 on error
+        
+        std::cout << "  ✓ Null payload pointer error handling\n";
+    }
+    
+    // Test 14: Test hex encoding with all byte values
+    {
+        // Test key with all possible nibble values to verify hex encoding
+        std::array<uint8_t, 16> reg_key = {
+            0x00, 0x01, 0x0F, 0x10, 0xFF, 0xFE, 0xAB, 0xCD,
+            0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xEF
+        };
+        
+        size_t len = build_register_payload(PROTOCOL_VERSION_V1, reg_key, payload);
+        assert(len == 36);
+        
+        // Verify hex encoding: each byte becomes 2 hex chars
+        // 0x00->"00", 0x01->"01", 0x0F->"0f", 0x10->"10", 
+        // 0xFF->"ff", 0xFE->"fe", 0xAB->"ab", 0xCD->"cd",
+        // 0x12->"12", 0x34->"34", 0x56->"56", 0x78->"78",
+        // 0x9A->"9a", 0xBC->"bc", 0xDE->"de", 0xEF->"ef"
+        const char* expected_hex = "00010f10fffeabcd123456789abcdeef";
+        for (size_t i = 0; i < 32; i++) {
+            assert(payload[4 + i] == static_cast<uint8_t>(expected_hex[i]));
+        }
+        
+        std::cout << "  ✓ Hex encoding with all byte values\n";
+    }
+    
+    // Test 15: Test with V0 protocol version
+    {
+        std::array<uint8_t, 16> reg_key = {
+            0x99, 0x03, 0xe0, 0x1a, 0x3c, 0x3b, 0xaa, 0x8f,
+            0x6c, 0x71, 0xcb, 0xb5, 0x16, 0x7e, 0x7d, 0x5f
+        };
+        
+        size_t len = build_register_payload(PROTOCOL_VERSION_V0, reg_key, payload);
+        assert(len == 36);
+        assert(payload[0] == PROTOCOL_VERSION_V0);  // 0x00
+        
+        len = build_hello_payload(PROTOCOL_VERSION_V0, reg_key, payload);
+        assert(len == 36);
+        assert(payload[0] == PROTOCOL_VERSION_V0);  // 0x00
+        
+        std::cout << "  ✓ Protocol version V0 support\n";
+    }
+    
     std::cout << "All protocol build tests passed!\n\n";
 }
 

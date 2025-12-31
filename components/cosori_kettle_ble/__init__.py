@@ -6,7 +6,7 @@ from esphome.const import CONF_ID
 
 CODEOWNERS = ["@barrymichels"]
 DEPENDENCIES = ["ble_client"]
-AUTO_LOAD = ["sensor", "binary_sensor", "number", "switch", "climate"]
+AUTO_LOAD = ["sensor", "binary_sensor", "number", "switch", "button", "climate"]
 
 CONF_COSORI_KETTLE_BLE_ID = "cosori_kettle_ble_id"
 CONF_REGISTRATION_KEY = "registration_key"
