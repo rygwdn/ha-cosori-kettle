@@ -1231,6 +1231,7 @@ void CosoriKettleBLE::process_command_state_machine_() {
   
   if (this->command_state_ != initial_state) {
     ESP_LOGD(TAG, "Command state changed from %d to %d", initial_state, this->command_state_);
+    this->process_command_state_machine_();
   }
 }
 
