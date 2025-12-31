@@ -1,0 +1,107 @@
+---
+# ESPHome configuration used for testing the Cosori Kettle BLE component
+
+substitutions:
+  device_name: cosori-kettle
+  friendly_name: "Cosori Kettle"
+
+esphome:
+  name: ${device_name}
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+logger:
+  level: DEBUG
+
+ble_client:
+  - mac_address: "C4:A9:B8:73:AB:29"
+    id: cosori_kettle_client
+    auto_connect: true
+
+external_components:
+  - source: ./components
+    components: [cosori_kettle_ble]
+    refresh: 0s
+
+cosori_kettle_ble:
+  ble_client_id: cosori_kettle_client
+  id: my_cosori_kettle
+  name: "${friendly_name} Temperature Control"  # Sets the climate entity name
+  update_interval: 1s
+  protocol_version: 1
+  registration_key: '9903e01a3c3baa8f6c71cbb5167e7d5f'
+
+sensor:
+  - platform: cosori_kettle_ble
+    cosori_kettle_ble_id: my_cosori_kettle
+    temperature:
+      name: "${friendly_name} Temperature"
+      id: kettle_temp
+      unit_of_measurement: "°F"
+      accuracy_decimals: 0
+      device_class: temperature
+    kettle_setpoint:
+      name: "${friendly_name} Kettle Setpoint"
+      id: kettle_sp
+      unit_of_measurement: "°F"
+      accuracy_decimals: 0
+      device_class: temperature
+
+# ============================================================================
+# Binary Sensors (on/off status indicators)
+# ============================================================================
+binary_sensor:
+  - platform: cosori_kettle_ble
+    cosori_kettle_ble_id: my_cosori_kettle
+
+    # Is the kettle on its base?
+    on_base:
+      name: "${friendly_name} On Base"
+      device_class: connectivity
+
+    # Is the kettle actively heating?
+    heating:
+      name: "${friendly_name} Heating"
+      device_class: heat
+
+# ============================================================================
+# Number Input (target temperature control)
+# ============================================================================
+number:
+  - platform: cosori_kettle_ble
+    cosori_kettle_ble_id: my_cosori_kettle
+
+    # User-adjustable target setpoint (104-212°F)
+    target_setpoint:
+      name: "${friendly_name} Target Temperature"
+      id: target_temp
+      min_value: 104
+      max_value: 212
+      step: 1
+      unit_of_measurement: "°F"
+      mode: box  # or "slider"
+      icon: "mdi:thermometer"
+
+# ============================================================================
+# Switches (control actions)
+# ============================================================================
+switch:
+  - platform: cosori_kettle_ble
+    cosori_kettle_ble_id: my_cosori_kettle
+
+    heating_switch:
+      name: "${friendly_name} Heating"
+      id: heating_control
+      icon: "mdi:kettle"
+    ble_connection_switch:
+      name: "${friendly_name} BLE Connection"
+      id: ble_control
+      icon: "mdi:bluetooth"
+      restore_mode: RESTORE_DEFAULT_ON
+    register_switch:
+      name: "${friendly_name} Register"
+      id: register_sw
+      icon: "mdi:key-plus"

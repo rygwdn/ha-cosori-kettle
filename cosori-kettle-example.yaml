@@ -187,6 +187,16 @@ switch:
       # Turn OFF to disconnect and allow official mobile app to connect
       # (Kettle only allows one BLE connection at a time)
 
+    # Register/pair with kettle (requires device to be in pairing mode)
+    register_switch:
+      name: "${friendly_name} Register"
+      id: register_sw
+      icon: "mdi:key-plus"
+      # Enable to send registration command (0x80) to pair with kettle
+      # Device must be in pairing mode for this to work
+      # After successful registration, switch automatically turns off
+      # Disable to send hello command (0x81) for reconnection
+
 # ============================================================================
 # Home Assistant Dashboard Examples
 # ============================================================================
@@ -212,6 +222,7 @@ switch:
 #   - entity: number.cosori_kettle_target_temperature
 #   - entity: switch.cosori_kettle_heating
 #   - entity: switch.cosori_kettle_ble_connection
+#   - entity: switch.cosori_kettle_register
 
 # ============================================================================
 # Home Assistant Automations Example

@@ -6,7 +6,6 @@
 #include "esphome/components/binary_sensor/binary_sensor.h"
 #include "esphome/components/number/number.h"
 #include "esphome/components/switch/switch.h"
-#include "esphome/components/button/button.h"
 #include "esphome/components/climate/climate.h"
 
 #ifdef USE_ESP32
@@ -45,9 +44,7 @@ class CosoriKettleBLE : public esphome::ble_client::BLEClientNode, public Pollin
   void set_heating_switch(switch_::Switch *sw) { heating_switch_ = sw; }
   void set_ble_connection_switch(switch_::Switch *sw) { ble_connection_switch_ = sw; }
   void set_baby_formula_switch(switch_::Switch *sw) { baby_formula_switch_ = sw; }
-  
-  // Button setters
-  void set_register_button(button::Button *btn) { register_button_ = btn; }
+  void set_register_switch(switch_::Switch *sw) { register_switch_ = sw; }
 
   // Public control methods (called by switches/numbers/buttons)
   void set_target_setpoint(float temp_f);
@@ -57,7 +54,7 @@ class CosoriKettleBLE : public esphome::ble_client::BLEClientNode, public Pollin
   void start_heating();
   void stop_heating();
   void enable_ble_connection(bool enable);
-  void register_device();
+  void set_register_enabled(bool enabled);
 
   // Connection state queries
   bool is_connected() const { return this->node_state == esp32_ble_tracker::ClientState::ESTABLISHED; }
@@ -159,7 +156,7 @@ class CosoriKettleBLE : public esphome::ble_client::BLEClientNode, public Pollin
   switch_::Switch *heating_switch_{nullptr};
   switch_::Switch *ble_connection_switch_{nullptr};
   switch_::Switch *baby_formula_switch_{nullptr};
-  button::Button *register_button_{nullptr};
+  switch_::Switch *register_switch_{nullptr};
 
   // Protocol methods
   void send_hello_();
@@ -294,15 +291,16 @@ class CosoriKettleBabyFormulaSwitch : public switch_::Switch, public Component {
   CosoriKettleBLE *parent_{nullptr};
 };
 
-class CosoriKettleRegisterButton : public button::Button, public Component {
+class CosoriKettleRegisterSwitch : public switch_::Switch, public Component {
  public:
   void set_parent(CosoriKettleBLE *parent) { this->parent_ = parent; }
 
  protected:
-  void press_action() override {
+  void write_state(bool state) override {
     if (this->parent_ != nullptr) {
-      this->parent_->register_device();
+      this->parent_->set_register_enabled(state);
     }
+    // Note: Don't call publish_state here - the parent will update us when registration completes
   }
 
   CosoriKettleBLE *parent_{nullptr};

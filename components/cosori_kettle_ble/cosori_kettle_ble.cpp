@@ -79,7 +79,7 @@ void CosoriKettleBLE::dump_config() {
   LOG_SWITCH("  ", "Heating Control", this->heating_switch_);
   LOG_SWITCH("  ", "BLE Connection", this->ble_connection_switch_);
   LOG_SWITCH("  ", "Baby Formula", this->baby_formula_switch_);
-  LOG_BUTTON("  ", "Register", this->register_button_);
+  LOG_SWITCH("  ", "Register", this->register_switch_);
 }
 
 void CosoriKettleBLE::update() {
@@ -247,7 +247,7 @@ void CosoriKettleBLE::send_hello_() {
   
   // Start handshake state machine instead of blocking
   this->use_register_command_ = false;
-  ESP_LOGI(TAG, "Starting registration handshake (hello)");
+  ESP_LOGI(TAG, "Starting handshake (hello)");
   this->command_state_ = CommandState::HANDSHAKE_START;
   this->command_state_time_ = millis();
 }
@@ -413,14 +413,29 @@ void CosoriKettleBLE::send_request_compact_status_(uint8_t seq_base) {
 // ============================================================================
 
 bool CosoriKettleBLE::send_command(uint8_t seq, const uint8_t *payload, size_t payload_len, bool is_ack) {
+  if (esp_log_level_get(TAG) >= ESP_LOG_DEBUG) {
+    std::string hex_str;
+    hex_str.reserve(payload_len * 3);  // Pre-allocate: "xx:" per byte
+    for (size_t i = 0; i < payload_len; i++) {
+      char buf[4];
+      snprintf(buf, sizeof(buf), "%02x%s", payload[i], (i < payload_len - 1) ? ":" : "");
+      hex_str += buf;
+    }
+    ESP_LOGD(TAG, "Sending command: seq=%02x, payload=%s", seq, hex_str.c_str());
+  }
+
   if (this->tx_char_handle_ == 0) {
     ESP_LOGW(TAG, "TX characteristic not ready");
     return false;
   }
 
   // Check if already sending something or waiting
-  if (this->waiting_for_write_ack_ || (this->send_chunk_index_ < this->send_total_chunks_)) {
-    ESP_LOGW(TAG, "Cannot send command: already sending (chunk %zu/%zu, waiting=%d)",
+  if (this->waiting_for_write_ack_) {
+    ESP_LOGW(TAG, "Cannot send command: already waiting for write acknowledgment");
+    return false;
+  }
+  if (this->send_chunk_index_ < this->send_total_chunks_) {
+    ESP_LOGW(TAG, "Cannot send command: already sending (chunk %zu/%zu)",
              this->send_chunk_index_, this->send_total_chunks_, this->waiting_for_write_ack_);
     return false;
   }
@@ -581,6 +596,17 @@ void CosoriKettleBLE::process_frame_buffer_() {
 
     // Update last RX sequence
     this->last_rx_seq_ = frame.seq;
+    
+    if (esp_log_level_get(TAG) >= ESP_LOG_DEBUG) {
+      std::string hex_str;
+      hex_str.reserve(frame.payload_len * 3);  // Pre-allocate: "xx:" per byte
+      for (size_t i = 0; i < frame.payload_len; i++) {
+        char buf[4];
+        snprintf(buf, sizeof(buf), "%02x%s", frame.payload[i], (i < frame.payload_len - 1) ? ":" : "");
+        hex_str += buf;
+      }
+      ESP_LOGD(TAG, "Received frame: type=%02x, seq=%02x, payload=%s", frame.frame_type, frame.seq, hex_str.c_str());
+    }
 
     if (frame.frame_type == MESSAGE_HEADER_TYPE && frame.payload[1] == CMD_CTRL) {
       this->parse_compact_status_(frame.payload, frame.payload_len);
@@ -686,14 +712,23 @@ void CosoriKettleBLE::set_target_setpoint(float temp_f) {
   }
 }
 
-void CosoriKettleBLE::register_device() {
+void CosoriKettleBLE::set_register_enabled(bool enabled) {
   if (!this->is_connected()) {
-    ESP_LOGW(TAG, "Cannot register device: not connected");
+    ESP_LOGW(TAG, "Cannot %s: not connected", enabled ? "register device" : "send hello");
+    // Update switch state to reflect failure
+    if (this->register_switch_ != nullptr) {
+      this->register_switch_->publish_state(false);
+    }
     return;
   }
 
-  ESP_LOGI(TAG, "Registering device with kettle");
-  this->send_register_();
+  if (enabled) {
+    ESP_LOGI(TAG, "Registering device with kettle");
+    this->send_register_();
+  } else {
+    ESP_LOGI(TAG, "Sending hello command");
+    this->send_hello_();
+  }
 }
 
 // TODO: add - delay start: 01F1 A300 {2b delay in seconds} {set mode payload}
@@ -1099,14 +1134,19 @@ void CosoriKettleBLE::process_command_state_machine_() {
     }
 
     case CommandState::HANDSHAKE_WAIT_CHUNKS:
-      if (!this->waiting_for_write_ack_ && this->send_chunk_index_ >= this->send_total_chunks_) {
+      if (!this->waiting_for_ack_complete_ && !this->waiting_for_write_ack_ && this->send_chunk_index_ >= this->send_total_chunks_) {
         this->command_state_ = CommandState::HANDSHAKE_POLL;
         this->command_state_time_ = now;
+      }
+      if (elapsed >= HANDSHAKE_TIMEOUT_MS) {
+        ESP_LOGE(TAG, "Handshake timeout");
+        this->command_state_ = CommandState::IDLE;
+        break;
       }
       break;
 
     case CommandState::HANDSHAKE_POLL:
-      if (elapsed >= HANDSHAKE_TIMEOUT_MS || !this->waiting_for_ack_complete_) {
+      if (!this->waiting_for_ack_complete_) {
         if (this->last_ack_error_code_ != 0) {
           ESP_LOGE(TAG, "Error in %s: %d", this->use_register_command_ ? "registration" : "handshake", this->last_ack_error_code_);
           this->command_state_ = CommandState::IDLE;
@@ -1116,6 +1156,16 @@ void CosoriKettleBLE::process_command_state_machine_() {
         this->send_status_request_();
         this->command_state_ = CommandState::IDLE;
         ESP_LOGI(TAG, "%s complete", this->use_register_command_ ? "Device registration" : "Registration handshake");
+        
+        // If registration was successful, turn off the switch
+        if (this->use_register_command_ && this->register_switch_ != nullptr) {
+          this->register_switch_->publish_state(false);
+        }
+      }
+      if (elapsed >= HANDSHAKE_TIMEOUT_MS) {
+        ESP_LOGE(TAG, "Handshake timeout");
+        this->command_state_ = CommandState::IDLE;
+        break;
       }
       break;
 

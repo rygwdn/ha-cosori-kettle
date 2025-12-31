@@ -318,8 +318,6 @@ void test_protocol_build() {
     
     // Test 10: Build register payload (pairing mode - 0x80)
     {
-        // Test with a known registration key
-        // Key: 9903e01a3c3baa8f6c71cbb5167e7d5f (16 bytes)
         std::array<uint8_t, 16> reg_key = {
             0x99, 0x03, 0xe0, 0x1a, 0x3c, 0x3b, 0xaa, 0x8f,
             0x6c, 0x71, 0xcb, 0xb5, 0x16, 0x7e, 0x7d, 0x5f
