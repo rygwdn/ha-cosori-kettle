@@ -27,10 +27,10 @@ $(TARGET): $(OBJECTS)
 test: $(TARGET)
 	./$(TARGET)
 
-run: test
+run: test compile
 
 compile:
-	uvx --python=3.13 --with=pip esphome compile cosori-kettle.build.yaml
+	uv run esphome compile cosori-kettle.build.yaml
 
 clean:
 	rm -f $(TARGET) $(OBJECTS) $(DEPS)
