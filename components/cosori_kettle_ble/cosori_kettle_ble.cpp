@@ -31,7 +31,7 @@ static constexpr uint32_t PRE_SETPOINT_DELAY_MS = 60;
 static constexpr uint32_t POST_SETPOINT_DELAY_MS = 100;
 static constexpr uint32_t CONTROL_DELAY_MS = 50;
 static constexpr uint32_t STATUS_TIMEOUT_MS = 2000;
-static constexpr uint32_t IDLE_TIMEOUT_MS = 10000;
+static constexpr uint32_t IDLE_TIMEOUT_MS = 30000;
 
 // Online/offline tracking
 static constexpr uint8_t NO_RESPONSE_THRESHOLD = 10;
