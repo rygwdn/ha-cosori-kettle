@@ -39,18 +39,12 @@ std::string bytes_to_hex_string(const uint8_t *data, size_t len) {
 void CosoriKettleBLE::setup() {
   ESP_LOGCONFIG(TAG, "Setting up Cosori Kettle BLE...");
 
-  // Create kettle state instance with config
-  CosoriKettleState::Config config;
-  config.protocol_version = 0;  // Will be set via set_protocol_version()
-  config.registration_key_set = false;
-  kettle_state_ = new CosoriKettleState(config);
-
   // Set callbacks
-  kettle_state_->set_send_data_callback([this](const uint8_t* data, size_t len) {
+  kettle_state_.set_send_data_callback([this](const uint8_t* data, size_t len) {
     this->send_ble_data_(data, len);
   });
 
-  kettle_state_->set_log_callback([this](int level, const char* message) {
+  kettle_state_.set_log_callback([this](int level, const char* message) {
     this->log_message_(level, message);
   });
 
@@ -62,7 +56,7 @@ void CosoriKettleBLE::setup() {
   // Initialize climate state (ESPHome climate expects Celsius)
   this->mode = climate::CLIMATE_MODE_OFF;
   this->action = climate::CLIMATE_ACTION_IDLE;
-  const auto& state = kettle_state_->get_state();
+  const auto& state = kettle_state_.get_state();
   this->target_temperature = (state.target_setpoint_f - 32.0f) * 5.0f / 9.0f;
   this->current_temperature = (state.current_temp_f - 32.0f) * 5.0f / 9.0f;
 }
@@ -86,12 +80,12 @@ void CosoriKettleBLE::dump_config() {
 }
 
 void CosoriKettleBLE::update() {
-  if (!this->ble_enabled_ || kettle_state_ == nullptr) {
+  if (!this->ble_enabled_) {
     return;
   }
 
   // Delegate to kettle state
-  kettle_state_->update(millis(), this->is_connected(), this->registration_sent_);
+  kettle_state_.update(millis(), this->is_connected(), this->registration_sent_);
 
   // Update entities based on current state
   update_entities_();
@@ -114,9 +108,7 @@ void CosoriKettleBLE::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_i
       this->rx_char_handle_ = 0;
       this->tx_char_handle_ = 0;
       this->notify_handle_ = 0;
-      if (kettle_state_ != nullptr) {
-        kettle_state_->reset();
-      }
+      kettle_state_.reset();
       this->registration_sent_ = false;
       break;
 
@@ -159,9 +151,7 @@ void CosoriKettleBLE::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_i
       ESP_LOGI(TAG, "Registered for notifications, sending registration handshake");
 
       // Send registration handshake via kettle state
-      if (kettle_state_ != nullptr) {
-        kettle_state_->send_hello(this->use_register_command_);
-      }
+      kettle_state_.send_hello(this->use_register_command_);
 
       // Mark registration sent
       this->registration_sent_ = true;
@@ -170,12 +160,12 @@ void CosoriKettleBLE::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_i
 
     case ESP_GATTC_WRITE_CHAR_EVT: {
       // Handle write acknowledgment for chunked packets
-      if (param->write.handle == this->tx_char_handle_ && kettle_state_ != nullptr) {
+      if (param->write.handle == this->tx_char_handle_) {
         bool success = (param->write.status == ESP_GATT_OK);
         if (!success) {
           ESP_LOGW(TAG, "Write failed, status=%d", param->write.status);
         }
-        kettle_state_->on_write_ack(success);
+        kettle_state_.on_write_ack(success);
       }
       break;
     }
@@ -189,11 +179,9 @@ void CosoriKettleBLE::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_i
       #endif
 
       // Delegate RX data processing to kettle state
-      if (kettle_state_ != nullptr) {
-        kettle_state_->process_rx_data(param->notify.value, param->notify.value_len);
-        // Update entities after processing
-        update_entities_();
-      }
+      kettle_state_.process_rx_data(param->notify.value, param->notify.value_len);
+      // Update entities after processing
+      update_entities_();
       break;
     }
 
@@ -241,9 +229,7 @@ void CosoriKettleBLE::log_message_(int level, const char* message) {
 // ============================================================================
 
 void CosoriKettleBLE::set_target_setpoint(float temp_f) {
-  if (kettle_state_ == nullptr) return;
-
-  kettle_state_->set_target_setpoint(temp_f);
+  kettle_state_.set_target_setpoint(temp_f);
 
   // Update number entity if it exists
   if (this->target_setpoint_number_ != nullptr) {
@@ -257,19 +243,15 @@ void CosoriKettleBLE::set_register_enabled(bool enabled) {
     this->register_switch_->publish_state(enabled);
   }
 
-  if (kettle_state_ != nullptr) {
-    if (enabled) {
-      ESP_LOGI(TAG, "Registering device with kettle");
-    } else {
-      ESP_LOGI(TAG, "Sending hello command");
-    }
-    kettle_state_->send_hello(enabled);
+  if (enabled) {
+    ESP_LOGI(TAG, "Registering device with kettle");
+  } else {
+    ESP_LOGI(TAG, "Sending hello command");
   }
+  kettle_state_.send_hello(enabled);
 }
 
 void CosoriKettleBLE::set_hold_time(float seconds) {
-  if (kettle_state_ == nullptr) return;
-
   // Clamp to valid range (0-65535 seconds)
   if (seconds < 0.0f) seconds = 0.0f;
   if (seconds > 65535.0f) seconds = 65535.0f;
@@ -283,13 +265,11 @@ void CosoriKettleBLE::set_hold_time(float seconds) {
 
   // Delegate to kettle state (will handle sending command if connected)
   if (this->is_connected()) {
-    kettle_state_->set_hold_time(seconds_int);
+    kettle_state_.set_hold_time(seconds_int);
   }
 }
 
 void CosoriKettleBLE::set_my_temp(float temp_f) {
-  if (kettle_state_ == nullptr) return;
-
   // Clamp to valid range
   if (temp_f < MIN_TEMP_F) temp_f = MIN_TEMP_F;
   if (temp_f > MAX_TEMP_F) temp_f = MAX_TEMP_F;
@@ -303,13 +283,11 @@ void CosoriKettleBLE::set_my_temp(float temp_f) {
 
   // Delegate to kettle state (will handle sending command if connected)
   if (this->is_connected()) {
-    kettle_state_->set_my_temp(temp_int);
+    kettle_state_.set_my_temp(temp_int);
   }
 }
 
 void CosoriKettleBLE::set_baby_formula_enabled(bool enabled) {
-  if (kettle_state_ == nullptr) return;
-
   // Update switch entity if it exists
   if (this->baby_formula_switch_ != nullptr) {
     this->baby_formula_switch_->publish_state(enabled);
@@ -317,26 +295,26 @@ void CosoriKettleBLE::set_baby_formula_enabled(bool enabled) {
 
   // Delegate to kettle state (will handle sending command if connected)
   if (this->is_connected()) {
-    kettle_state_->set_baby_formula_enabled(enabled);
+    kettle_state_.set_baby_formula_enabled(enabled);
   }
 }
 
 void CosoriKettleBLE::start_heating() {
-  if (!this->is_connected() || kettle_state_ == nullptr) {
+  if (!this->is_connected()) {
     ESP_LOGW(TAG, "Cannot start heating: not connected");
     return;
   }
 
-  kettle_state_->start_heating();
+  kettle_state_.start_heating();
 }
 
 void CosoriKettleBLE::stop_heating() {
-  if (!this->is_connected() || kettle_state_ == nullptr) {
+  if (!this->is_connected()) {
     ESP_LOGW(TAG, "Cannot stop heating: not connected");
     return;
   }
 
-  kettle_state_->stop_heating();
+  kettle_state_.stop_heating();
 }
 
 void CosoriKettleBLE::enable_ble_connection(bool enable) {
@@ -359,16 +337,12 @@ void CosoriKettleBLE::enable_ble_connection(bool enable) {
 }
 
 void CosoriKettleBLE::set_registration_key(const std::array<uint8_t, 16> &key) {
-  if (kettle_state_ != nullptr) {
-    kettle_state_->set_registration_key(key);
-  }
+  kettle_state_.set_registration_key(key);
   ESP_LOGD(TAG, "Registration key set");
 }
 
 void CosoriKettleBLE::set_protocol_version(uint8_t version) {
-  if (kettle_state_ != nullptr) {
-    kettle_state_->set_protocol_version(version);
-  }
+  kettle_state_.set_protocol_version(version);
 }
 
 // ============================================================================
@@ -442,9 +416,7 @@ void CosoriKettleBLE::control(const climate::ClimateCall &call) {
 // ============================================================================
 
 void CosoriKettleBLE::update_sensors_() {
-  if (kettle_state_ == nullptr) return;
-
-  const auto& state = kettle_state_->get_state();
+  const auto& state = kettle_state_.get_state();
 
   if (this->temperature_sensor_ != nullptr) {
     this->temperature_sensor_->publish_state(state.current_temp_f);
@@ -468,11 +440,9 @@ void CosoriKettleBLE::update_sensors_() {
 }
 
 void CosoriKettleBLE::update_mutable_entities_() {
-  if (kettle_state_ == nullptr) return;
+  const auto& state = kettle_state_.get_state();
 
-  const auto& state = kettle_state_->get_state();
-
-  if (!kettle_state_->is_idle()) {
+  if (!kettle_state_.is_idle()) {
     return;
   }
 
@@ -480,15 +450,15 @@ void CosoriKettleBLE::update_mutable_entities_() {
     this->target_setpoint_number_->publish_state(state.target_setpoint_f);
   }
 
-  if (this->hold_time_number_ != nullptr && !kettle_state_->is_pending_hold_time()) {
+  if (this->hold_time_number_ != nullptr && !kettle_state_.is_pending_hold_time()) {
     this->hold_time_number_->publish_state(static_cast<float>(state.hold_time_seconds));
   }
 
-  if (this->my_temp_number_ != nullptr && !kettle_state_->is_pending_my_temp()) {
+  if (this->my_temp_number_ != nullptr && !kettle_state_.is_pending_my_temp()) {
     this->my_temp_number_->publish_state(static_cast<float>(state.my_temp_f));
   }
 
-  if (this->baby_formula_switch_ != nullptr && !kettle_state_->is_pending_baby_formula()) {
+  if (this->baby_formula_switch_ != nullptr && !kettle_state_.is_pending_baby_formula()) {
     this->baby_formula_switch_->publish_state(state.baby_formula_enabled);
   }
 
@@ -503,37 +473,33 @@ void CosoriKettleBLE::update_entities_() {
   update_climate_state_();
 
   // Handle offline status
-  if (kettle_state_ != nullptr) {
-    const auto& state = kettle_state_->get_state();
-    if (state.no_response_count >= NO_RESPONSE_THRESHOLD && state.status_received) {
-      ESP_LOGW(TAG, "No response from kettle, marking offline");
+  const auto& state = kettle_state_.get_state();
+  if (state.no_response_count >= NO_RESPONSE_THRESHOLD && state.status_received) {
+    ESP_LOGW(TAG, "No response from kettle, marking offline");
 
-      // Publish unavailable state
-      if (this->temperature_sensor_ != nullptr)
-        this->temperature_sensor_->publish_state(NAN);
-      if (this->kettle_setpoint_sensor_ != nullptr)
-        this->kettle_setpoint_sensor_->publish_state(NAN);
-      if (this->hold_time_remaining_sensor_ != nullptr)
-        this->hold_time_remaining_sensor_->publish_state(NAN);
-      if (this->on_base_binary_sensor_ != nullptr)
-        this->on_base_binary_sensor_->invalidate_state();
-      if (this->heating_binary_sensor_ != nullptr)
-        this->heating_binary_sensor_->invalidate_state();
+    // Publish unavailable state
+    if (this->temperature_sensor_ != nullptr)
+      this->temperature_sensor_->publish_state(NAN);
+    if (this->kettle_setpoint_sensor_ != nullptr)
+      this->kettle_setpoint_sensor_->publish_state(NAN);
+    if (this->hold_time_remaining_sensor_ != nullptr)
+      this->hold_time_remaining_sensor_->publish_state(NAN);
+    if (this->on_base_binary_sensor_ != nullptr)
+      this->on_base_binary_sensor_->invalidate_state();
+    if (this->heating_binary_sensor_ != nullptr)
+      this->heating_binary_sensor_->invalidate_state();
 
-      if (this->hold_time_number_ != nullptr)
-        this->hold_time_number_->publish_state(NAN);
-      if (this->my_temp_number_ != nullptr)
-        this->my_temp_number_->publish_state(NAN);
-      if (this->target_setpoint_number_ != nullptr)
-        this->target_setpoint_number_->publish_state(NAN);
-    }
+    if (this->hold_time_number_ != nullptr)
+      this->hold_time_number_->publish_state(NAN);
+    if (this->my_temp_number_ != nullptr)
+      this->my_temp_number_->publish_state(NAN);
+    if (this->target_setpoint_number_ != nullptr)
+      this->target_setpoint_number_->publish_state(NAN);
   }
 }
 
 void CosoriKettleBLE::update_climate_state_() {
-  if (kettle_state_ == nullptr) return;
-
-  const auto& state = kettle_state_->get_state();
+  const auto& state = kettle_state_.get_state();
 
   // Update current temperature (convert F to C for ESPHome climate)
   this->current_temperature = (state.current_temp_f - 32.0f) * 5.0f / 9.0f;

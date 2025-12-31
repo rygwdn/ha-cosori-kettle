@@ -27,6 +27,32 @@ static constexpr uint8_t NO_RESPONSE_THRESHOLD = 10;
 // Constructor and Configuration
 // ============================================================================
 
+CosoriKettleState::CosoriKettleState()
+  : config_(),
+    state_(),
+    send_data_callback_(nullptr),
+    log_callback_(nullptr),
+    last_rx_seq_(0),
+    tx_seq_(0),
+    last_ack_error_code_(0),
+    waiting_for_ack_complete_(false),
+    waiting_for_ack_seq_(0),
+    last_status_seq_(0),
+    send_buffer_(),
+    recv_buffer_(),
+    send_chunk_index_(0),
+    send_total_chunks_(0),
+    waiting_for_write_ack_(false),
+    pending_hold_time_(false),
+    pending_my_temp_(false),
+    pending_baby_formula_(false),
+    command_state_(CommandState::IDLE),
+    command_state_time_(0),
+    pending_mode_(0),
+    pending_temp_f_(0),
+    use_register_command_(false) {
+}
+
 CosoriKettleState::CosoriKettleState(const Config& config)
   : config_(config),
     state_(),

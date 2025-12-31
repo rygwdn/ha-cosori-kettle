@@ -78,7 +78,7 @@ class CosoriKettleBLE : public esphome::ble_client::BLEClientNode, public Pollin
   uint16_t notify_handle_{0};
 
   // Kettle state (platform-independent logic)
-  CosoriKettleState* kettle_state_{nullptr};
+  CosoriKettleState kettle_state_;
 
   // Connection management
   bool ble_enabled_{true};

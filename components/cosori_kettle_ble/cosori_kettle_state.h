@@ -105,6 +105,7 @@ class CosoriKettleState {
   // Constructor and Configuration
   // ============================================================================
 
+  CosoriKettleState();
   CosoriKettleState(const Config& config);
 
   void set_send_data_callback(SendDataCallback callback) { send_data_callback_ = callback; }
