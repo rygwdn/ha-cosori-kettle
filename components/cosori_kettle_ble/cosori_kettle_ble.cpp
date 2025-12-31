@@ -26,11 +26,12 @@ static constexpr size_t MAX_PAYLOAD_SIZE = 256;
 // Temperature limits and operating modes are now defined in protocol.h
 
 // Timing constants (milliseconds)
-static constexpr uint32_t HANDSHAKE_TIMEOUT_MS = 10000;
+static constexpr uint32_t HANDSHAKE_TIMEOUT_MS = 5000;
 static constexpr uint32_t PRE_SETPOINT_DELAY_MS = 60;
 static constexpr uint32_t POST_SETPOINT_DELAY_MS = 100;
 static constexpr uint32_t CONTROL_DELAY_MS = 50;
 static constexpr uint32_t STATUS_TIMEOUT_MS = 2000;
+static constexpr uint32_t IDLE_TIMEOUT_MS = 10000;
 
 // Online/offline tracking
 static constexpr uint8_t NO_RESPONSE_THRESHOLD = 10;
@@ -550,15 +551,36 @@ void CosoriKettleBLE::process_frame_buffer_() {
       ESP_LOGD(TAG, "Processing frame: type=%02x, seq=%02x, payload=%s", frame.frame_type, frame.seq, bytes_to_hex_string(frame.payload, frame.payload_len).c_str());
     #endif
 
-    if (frame.frame_type == ACK_HEADER_TYPE && this->waiting_for_ack_complete_ && this->waiting_for_ack_seq_ == frame.seq) {
-      this->waiting_for_ack_complete_ = false;
-      this->last_ack_error_code_ = frame.payload_len > 4 ? static_cast<uint8_t>(frame.payload[4]) : 0;
-      ESP_LOGD(TAG, "ACK complete: seq=%02x, error_code=%02x", frame.seq, this->last_ack_error_code_);
+    if (frame.frame_type == ACK_HEADER_TYPE) {
+      uint8_t ack_status = frame.payload_len > 4 ? static_cast<uint8_t>(frame.payload[4]) : 0;
+
+      if (this->waiting_for_ack_complete_ && this->waiting_for_ack_seq_ == frame.seq) {
+        this->waiting_for_ack_complete_ = false;
+        this->last_ack_error_code_ = ack_status;
+        ESP_LOGI(TAG, "ACK complete: seq=%02x, error_code=%02x", frame.seq, ack_status);
+      }
+
+      if (this->pending_baby_formula_ && frame.payload[1] == CMD_SET_BABY_FORMULA) {
+        this->pending_baby_formula_ = false;
+        ESP_LOGI(TAG, "Baby formula update confirmed: %d", ack_status);
+      }
+
+      if (this->pending_hold_time_ && frame.payload[1] == CMD_SET_HOLD_TIME) {
+        this->pending_hold_time_ = false;
+        ESP_LOGI(TAG, "Hold time update confirmed: %d", ack_status);
+      }
+
+      if (this->pending_my_temp_ && frame.payload[1] == CMD_SET_MY_TEMP) {
+        this->pending_my_temp_ = false;
+        ESP_LOGI(TAG, "My temp update confirmed: %d", ack_status);
+      }
     }
 
     if (frame.frame_type == MESSAGE_HEADER_TYPE && frame.payload[1] == CMD_CTRL) {
       this->parse_compact_status_(frame.payload, frame.payload_len);
-    } else if (frame.frame_type == ACK_HEADER_TYPE && frame.payload[1] == CMD_POLL) {
+    }
+
+    if (frame.frame_type == ACK_HEADER_TYPE && frame.payload[1] == CMD_POLL) {
       this->parse_status_ack_(frame.payload, frame.payload_len);
     }
   }
@@ -597,30 +619,15 @@ void CosoriKettleBLE::parse_status_ack_(const uint8_t *payload, size_t len) {
   this->on_base_ = status.on_base;
   this->remaining_hold_time_seconds_ = status.remaining_hold_time;
 
-  if (this->pending_my_temp_) {
-    this->pending_my_temp_ = false;
-    this->my_temp_f_ = status.my_temp;
-    ESP_LOGD(TAG, "My temp update confirmed: %d°F", status.my_temp);
-  } else {
-    // Not pending, safe to update from device
+  if (!this->pending_my_temp_) {
     this->my_temp_f_ = status.my_temp;
   }
 
-  if (this->pending_hold_time_) {
-    this->pending_hold_time_ = false;
-    this->hold_time_seconds_ = status.configured_hold_time;
-    ESP_LOGD(TAG, "Hold time update confirmed: %u seconds", status.configured_hold_time);
-  } else {
-    // Not pending, safe to update from device
+  if (!this->pending_hold_time_) {
     this->hold_time_seconds_ = status.configured_hold_time;
   }
 
-  if (this->pending_baby_formula_) {
-    this->pending_baby_formula_ = false;
-    this->baby_formula_enabled_ = status.baby_formula_enabled;
-    ESP_LOGD(TAG, "Baby formula update confirmed: %s", status.baby_formula_enabled ? "enabled" : "disabled");
-  } else {
-    // Not pending, safe to update from device
+  if (!this->pending_baby_formula_) {
     this->baby_formula_enabled_ = status.baby_formula_enabled;
   }
 
@@ -1119,7 +1126,8 @@ void CosoriKettleBLE::process_command_state_machine_() {
     case CommandState::HEAT_START:
       if (elapsed >= PRE_SETPOINT_DELAY_MS && !this->pending_my_temp_) {
         this->send_set_mode(this->pending_mode_, this->pending_temp_f_);
-        this->command_state_ = CommandState::HEAT_POLL;
+        const auto next_state = this->protocol_version_ == 1 ? CommandState::HEAT_COMPLETE : CommandState::HEAT_POLL;
+        this->command_state_ = next_state;
         this->command_state_time_ = now;
       }
       break;
@@ -1177,6 +1185,9 @@ void CosoriKettleBLE::process_command_state_machine_() {
   if (this->command_state_ != initial_state) {
     ESP_LOGD(TAG, "Command state changed from %d to %d", initial_state, this->command_state_);
     this->process_command_state_machine_();
+  } else if (this->command_state_ == CommandState::IDLE && elapsed >= IDLE_TIMEOUT_MS) {
+    ESP_LOGE(TAG, "Idle timeout");
+    this->command_state_ = CommandState::IDLE;
   }
 }
 
