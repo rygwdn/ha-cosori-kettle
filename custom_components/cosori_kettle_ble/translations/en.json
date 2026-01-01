@@ -1,0 +1,22 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Select Cosori Kettle",
+        "description": "Select your Cosori Kettle from the list of discovered devices.",
+        "data": {
+          "address": "Device"
+        }
+      },
+      "confirm": {
+        "title": "Add Cosori Kettle",
+        "description": "Do you want to add the Cosori Kettle {name} ({address}) to Home Assistant?"
+      }
+    },
+    "abort": {
+      "already_configured": "Device is already configured",
+      "not_supported": "This device is not a Cosori Kettle",
+      "no_devices_found": "No Cosori Kettle devices found"
+    }
+  }
+}
