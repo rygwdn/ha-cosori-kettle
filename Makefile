@@ -17,7 +17,7 @@ TEST_STATE_OBJECTS = $(TEST_STATE_SOURCES:.cpp=.o)
 
 DEPS = $(TEST_CPP_SOURCES:.cpp=.d) $(TEST_STATE_SOURCES:.cpp=.d)
 
-.PHONY: all clean test run compile
+.PHONY: all clean test test-cpp test-pytest test-all run compile
 
 all: tests/test_cpp tests/test_state
 
@@ -33,9 +33,17 @@ tests/test_state: $(TEST_STATE_OBJECTS)
 # Include dependency files
 -include $(DEPS)
 
-test: tests/test_cpp tests/test_state
+test-cpp: tests/test_cpp tests/test_state
 	./tests/test_cpp
 	./tests/test_state
+
+test-pytest:
+	@if [ ! -d .venv ]; then uv venv && uv pip install pytest pytest-asyncio; fi
+	@PYTHONPATH=custom_components .venv/bin/pytest tests/ha_component/test_protocol.py -v
+
+test-all: test-cpp test-pytest
+
+test: test-all
 
 run: test compile
 
