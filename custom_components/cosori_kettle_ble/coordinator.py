@@ -9,6 +9,7 @@ from typing import Any
 from bleak import BleakClient
 from bleak.backends.device import BLEDevice
 from bleak.exc import BleakError
+from bleak_retry_connector import establish_connection
 
 from homeassistant.components import bluetooth
 from homeassistant.core import HomeAssistant, callback
@@ -85,16 +86,21 @@ class CosoriKettleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         _LOGGER.debug("Connecting to %s", self._ble_device.address)
 
         try:
-            self._client = await bluetooth.async_ble_device_from_address(
+            # Get updated BLE device from HA's Bluetooth manager
+            ble_device = bluetooth.async_ble_device_from_address(
                 self.hass, self._ble_device.address, connectable=True
             )
 
-            if self._client is None:
-                raise UpdateFailed("Failed to get BLE device")
+            if ble_device is None:
+                raise UpdateFailed("Device not found")
 
-            # Create BleakClient
-            self._client = BleakClient(self._ble_device)
-            await self._client.connect()
+            # Use retry connector for robust connection
+            self._client = await establish_connection(
+                BleakClient,
+                ble_device,
+                self._ble_device.address,
+                disconnected_callback=self._on_disconnect,
+            )
 
             # Subscribe to notifications
             await self._client.start_notify(CHAR_RX_UUID, self._notification_handler)
@@ -109,6 +115,11 @@ class CosoriKettleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER.error("Failed to connect: %s", err)
             await self._disconnect()
             raise UpdateFailed(f"Failed to connect: {err}") from err
+
+    def _on_disconnect(self, client: BleakClient) -> None:
+        """Handle disconnection."""
+        _LOGGER.warning("Disconnected from %s", self._ble_device.address)
+        self._connected = False
 
     async def _disconnect(self) -> None:
         """Disconnect from the device."""
