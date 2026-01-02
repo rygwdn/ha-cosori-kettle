@@ -5,6 +5,7 @@ from cosori_kettle_ble.protocol import (
     CompactStatus,
     Envelope,
     ExtendedStatus,
+    Frame,
     build_compact_status_request_payload,
     build_hello_payload,
     build_register_payload,
@@ -85,11 +86,10 @@ class TestEnvelopeParse:
 
         frame = env.process_next_frame()
         assert frame is not None
-        frame_type, seq, payload = frame
-        assert frame_type == 0x22
-        assert seq == 0x41
-        assert len(payload) == 4
-        assert payload == packet[6:]
+        assert frame.frame_type == 0x22
+        assert frame.seq == 0x41
+        assert len(frame.payload) == 4
+        assert frame.payload == packet[6:]
 
     def test_parse_compact_status(self, hex_to_bytes):
         """Test parsing compact status."""
@@ -99,10 +99,9 @@ class TestEnvelopeParse:
 
         frame = env.process_next_frame()
         assert frame is not None
-        frame_type, seq, payload = frame
-        assert frame_type == 0x22
-        assert seq == 0xB5
-        assert len(payload) == 12
+        assert frame.frame_type == 0x22
+        assert frame.seq == 0xB5
+        assert len(frame.payload) == 12
 
     def test_parse_extended_status_ack(self, hex_to_bytes):
         """Test parsing extended status ACK."""
@@ -112,10 +111,9 @@ class TestEnvelopeParse:
 
         frame = env.process_next_frame()
         assert frame is not None
-        frame_type, seq, payload = frame
-        assert frame_type == 0x12  # ACK
-        assert seq == 0x40
-        assert len(payload) == 29
+        assert frame.frame_type == 0x12  # ACK
+        assert frame.seq == 0x40
+        assert len(frame.payload) == 29
 
     def test_parse_completion_notification(self, hex_to_bytes):
         """Test parsing completion notification."""
@@ -125,10 +123,9 @@ class TestEnvelopeParse:
 
         frame = env.process_next_frame()
         assert frame is not None
-        frame_type, seq, payload = frame
-        assert frame_type == 0x22
-        assert seq == 0x98
-        assert len(payload) == 5
+        assert frame.frame_type == 0x22
+        assert frame.seq == 0x98
+        assert len(frame.payload) == 5
 
     def test_parse_multiple_frames(self, hex_to_bytes):
         """Test parsing multiple frames in sequence."""
@@ -460,18 +457,17 @@ class TestRealPackets:
 
         frame = env.process_next_frame()
         assert frame is not None
-        frame_type, seq, payload = frame
-        assert seq == 0x48
-        assert len(payload) == 9
-        assert payload[0] == 0x01
-        assert payload[1] == 0xF0
-        assert payload[2] == 0xA3
-        assert payload[3] == 0x00
-        assert payload[4] == 0x03  # mode = coffee
-        assert payload[5] == 0x00
-        assert payload[6] == 0x00  # hold disabled
-        assert payload[7] == 0x00  # hold time
-        assert payload[8] == 0x00
+        assert frame.seq == 0x48
+        assert len(frame.payload) == 9
+        assert frame.payload[0] == 0x01
+        assert frame.payload[1] == 0xF0
+        assert frame.payload[2] == 0xA3
+        assert frame.payload[3] == 0x00
+        assert frame.payload[4] == 0x03  # mode = coffee
+        assert frame.payload[5] == 0x00
+        assert frame.payload[6] == 0x00  # hold disabled
+        assert frame.payload[7] == 0x00  # hold time
+        assert frame.payload[8] == 0x00
 
     def test_stop_command(self, hex_to_bytes):
         """Test stop command."""

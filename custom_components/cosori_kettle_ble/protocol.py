@@ -55,8 +55,25 @@ class ExtendedStatus:
     valid: bool = False
 
 
+@dataclass
+class Frame:
+    """A parsed BLE frame.
+
+    Supports both attribute access (frame.frame_type) and tuple unpacking
+    for backward compatibility (frame_type, seq, payload = frame).
+    """
+
+    frame_type: int
+    seq: int
+    payload: bytes
+
+    def __iter__(self):
+        """Support tuple unpacking for backward compatibility."""
+        return iter((self.frame_type, self.seq, self.payload))
+
+
 class Envelope:
-    """BLE packet envelope handler."""
+    """BLE packet envelope handler with Pythonic interface."""
 
     def __init__(self) -> None:
         """Initialize envelope."""
@@ -68,61 +85,112 @@ class Envelope:
         self._buffer.clear()
         self._pos = 0
 
+    @property
     def size(self) -> int:
         """Get buffer size."""
         return len(self._buffer)
 
+    @property
     def remaining(self) -> int:
         """Get remaining unread data."""
         return max(0, len(self._buffer) - self._pos)
 
-    def append(self, data: bytes) -> bool:
+    def append(self, data: bytes) -> None:
         """Append data to buffer."""
         self._buffer.extend(data)
-        return True
 
-    def build(
-        self, frame_type: int, seq: int, payload: bytes
-    ) -> bytes:
-        """Build a complete packet with envelope header."""
+    @staticmethod
+    def build(frame_type: int, seq: int, payload: bytes) -> bytes:
+        """Build a complete packet with envelope header.
+
+        Args:
+            frame_type: Frame type (MESSAGE_HEADER_TYPE or ACK_HEADER_TYPE)
+            seq: Sequence number
+            payload: Payload bytes
+
+        Returns:
+            Complete packet with envelope header and checksum
+        """
         payload_len = len(payload)
-        self._buffer = bytearray(6 + payload_len)
-        self._pos = 0
+        packet = bytearray(6 + payload_len)
 
-        self._buffer[0] = FRAME_MAGIC
-        self._buffer[1] = frame_type
-        self._buffer[2] = seq
-        self._buffer[3] = payload_len & 0xFF
-        self._buffer[4] = (payload_len >> 8) & 0xFF
-        self._buffer[5] = 0x01  # Will be calculated
+        packet[0] = FRAME_MAGIC
+        packet[1] = frame_type
+        packet[2] = seq
+        packet[3] = payload_len & 0xFF
+        packet[4] = (payload_len >> 8) & 0xFF
+        packet[5] = 0x01  # Placeholder, will be calculated
 
         if payload:
-            self._buffer[6:] = payload
+            packet[6:] = payload
 
         # Calculate and set checksum
-        self._buffer[5] = self._calculate_checksum(self._buffer)
+        packet[5] = Envelope._calculate_checksum(packet)
 
-        return bytes(self._buffer)
+        return bytes(packet)
 
     def set_message_payload(self, seq: int, payload: bytes) -> bytes:
-        """Build message packet (A522)."""
-        return self.build(MESSAGE_HEADER_TYPE, seq, payload)
+        """Build message packet (A522) and store for chunking.
 
-    def set_ack_payload(self, seq: int, payload: bytes) -> bytes:
-        """Build ACK packet (A512)."""
-        return self.build(ACK_HEADER_TYPE, seq, payload)
+        Args:
+            seq: Sequence number
+            payload: Payload bytes
+
+        Returns:
+            Complete packet
+        """
+        packet = self.build(MESSAGE_HEADER_TYPE, seq, payload)
+        self._buffer = bytearray(packet)
+        return packet
+
+    @staticmethod
+    def build_ack(seq: int, payload: bytes) -> bytes:
+        """Build ACK packet (A512).
+
+        Args:
+            seq: Sequence number
+            payload: Payload bytes
+
+        Returns:
+            Complete ACK packet
+        """
+        return Envelope.build(ACK_HEADER_TYPE, seq, payload)
 
     def get_chunks(self) -> list[bytes]:
-        """Get packet split into BLE chunks."""
-        chunks = []
-        for i in range(0, len(self._buffer), BLE_CHUNK_SIZE):
-            chunks.append(bytes(self._buffer[i : i + BLE_CHUNK_SIZE]))
-        return chunks
+        """Get stored packet split into BLE chunks.
 
-    def process_next_frame(self, max_payload_size: int = 512) -> Optional[tuple[int, int, bytes]]:
+        Returns:
+            List of chunks, each <= BLE_CHUNK_SIZE bytes
+        """
+        return [
+            bytes(self._buffer[i : i + BLE_CHUNK_SIZE])
+            for i in range(0, len(self._buffer), BLE_CHUNK_SIZE)
+        ]
+
+    def __iter__(self):
+        """Iterate over all available frames in the buffer.
+
+        Yields:
+            Frame objects for each complete, valid frame
+
+        Example:
+            for frame in envelope:
+                print(f"Type: {frame.frame_type:02x}, Seq: {frame.seq}")
+        """
+        while True:
+            frame = self.process_next_frame()
+            if frame is None:
+                break
+            yield frame
+
+    def process_next_frame(self, max_payload_size: int = 512) -> Optional[Frame]:
         """Process next frame from buffer.
 
-        Returns: (frame_type, seq, payload) or None
+        Args:
+            max_payload_size: Maximum allowed payload size (prevents buffer overflow)
+
+        Returns:
+            Frame object if a valid frame was found, None otherwise
         """
         while True:
             # Find frame start
@@ -166,7 +234,7 @@ class Envelope:
             # Advance position
             self._pos += frame_len
 
-            return (frame_type, seq, payload)
+            return Frame(frame_type=frame_type, seq=seq, payload=payload)
 
     def compact(self) -> None:
         """Compact buffer by removing processed data."""

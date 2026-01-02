@@ -26,6 +26,7 @@ from .const import (
 from .protocol import (
     Envelope,
     ExtendedStatus,
+    Frame,
     build_hello_payload,
     build_set_baby_formula_payload,
     build_set_mode_payload,
@@ -63,6 +64,10 @@ class CosoriKettleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._tx_seq = 0
         self._connected = False
         self._lock = asyncio.Lock()
+
+        # ACK handling
+        self._pending_ack: dict[int, asyncio.Future[tuple[int, bytes]]] = {}
+        self._ack_timeout = 5.0  # seconds
 
     async def async_start(self) -> None:
         """Start the coordinator."""
@@ -138,22 +143,39 @@ class CosoriKettleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         _LOGGER.debug("Received notification: %s", data.hex())
         self._rx_envelope.append(bytes(data))
 
-        # Process frames
-        while True:
-            frame = self._rx_envelope.process_next_frame()
-            if frame is None:
-                break
+        # Process all available frames
+        for frame in self._rx_envelope:
+            _LOGGER.debug(
+                "Processed frame: type=%02x seq=%02x payload=%s",
+                frame.frame_type,
+                frame.seq,
+                frame.payload.hex(),
+            )
 
-            frame_type, seq, payload = frame
-            _LOGGER.debug("Processed frame: type=%02x seq=%02x payload=%s", frame_type, seq, payload.hex())
+            # Handle ACK frames
+            if frame.frame_type == 0x12:  # ACK_HEADER_TYPE
+                self._handle_ack(frame.seq, frame.payload)
 
             # Parse status
-            status = parse_extended_status(payload)
+            status = parse_extended_status(frame.payload)
             if status.valid:
                 self._update_data_from_status(status)
 
         # Compact buffer
         self._rx_envelope.compact()
+
+    def _handle_ack(self, seq: int, payload: bytes) -> None:
+        """Handle ACK frame."""
+        # Extract error code from payload[4] if available
+        error_code = payload[4] if len(payload) > 4 else 0
+        _LOGGER.debug("ACK received: seq=%02x error_code=%02x", seq, error_code)
+
+        # Complete pending future if exists
+        if seq in self._pending_ack:
+            future = self._pending_ack.pop(seq)
+            if not future.done():
+                future.set_result((error_code, payload))
+                _LOGGER.debug("ACK future completed for seq=%02x", seq)
 
     def _update_data_from_status(self, status: ExtendedStatus) -> None:
         """Update coordinator data from status."""
@@ -175,21 +197,60 @@ class CosoriKettleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         payload = build_hello_payload(self._protocol_version, self._registration_key)
         await self._send_packet(payload)
 
-    async def _send_packet(self, payload: bytes) -> None:
-        """Send a packet to the device."""
+    async def _send_packet(self, payload: bytes, wait_for_ack: bool = False) -> tuple[int, bytes] | None:
+        """Send a packet to the device.
+
+        Args:
+            payload: The payload to send
+            wait_for_ack: If True, wait for ACK response from device
+
+        Returns:
+            If wait_for_ack is True: (error_code, ack_payload) tuple
+            If wait_for_ack is False: None
+
+        Raises:
+            UpdateFailed: If not connected or ACK timeout
+        """
         if not self._client or not self._client.is_connected:
             raise UpdateFailed("Not connected to device")
 
         envelope = Envelope()
         packet = envelope.set_message_payload(self._tx_seq, payload)
+        seq = self._tx_seq
         self._tx_seq = (self._tx_seq + 1) & 0xFF
 
-        # Split into chunks if needed
-        chunks = envelope.get_chunks()
-        for chunk in chunks:
-            _LOGGER.debug("Sending chunk: %s", chunk.hex())
-            await self._client.write_gatt_char(CHAR_TX_UUID, chunk, response=False)
-            await asyncio.sleep(0.05)  # Small delay between chunks
+        # Create future for ACK if requested
+        ack_future: asyncio.Future[tuple[int, bytes]] | None = None
+        if wait_for_ack:
+            ack_future = asyncio.Future()
+            self._pending_ack[seq] = ack_future
+
+        try:
+            # Split into chunks if needed
+            chunks = envelope.get_chunks()
+            for chunk in chunks:
+                _LOGGER.debug("Sending chunk: %s", chunk.hex())
+                await self._client.write_gatt_char(CHAR_TX_UUID, chunk, response=False)
+                await asyncio.sleep(0.05)  # Small delay between chunks
+
+            # Wait for ACK if requested
+            if wait_for_ack and ack_future:
+                try:
+                    error_code, ack_payload = await asyncio.wait_for(
+                        ack_future, timeout=self._ack_timeout
+                    )
+                    if error_code != 0:
+                        _LOGGER.warning("Device returned error code: %02x", error_code)
+                    return (error_code, ack_payload)
+                except asyncio.TimeoutError:
+                    _LOGGER.error("Timeout waiting for ACK (seq=%02x)", seq)
+                    raise UpdateFailed(f"Timeout waiting for ACK (seq={seq:02x})")
+
+            return None
+        finally:
+            # Clean up pending ACK if not completed
+            if wait_for_ack and seq in self._pending_ack:
+                self._pending_ack.pop(seq, None)
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Poll the device for status."""
@@ -218,26 +279,47 @@ class CosoriKettleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Set heating mode."""
         async with self._lock:
             payload = build_set_mode_payload(self._protocol_version, mode, temp_f, hold_time)
-            await self._send_packet(payload)
-            await asyncio.sleep(0.2)
+            result = await self._send_packet(payload, wait_for_ack=True)
+            if result:
+                error_code, ack_payload = result
+                if error_code != 0:
+                    raise UpdateFailed(f"Device rejected set_mode command: error={error_code:02x}")
+                # Verify the ACK is for the correct command
+                if len(ack_payload) > 1 and ack_payload[1] != 0xF0:  # CMD_SET_MODE
+                    _LOGGER.warning("ACK command mismatch: expected F0, got %02x", ack_payload[1])
 
     async def async_set_my_temp(self, temp_f: int) -> None:
         """Set my temp."""
         async with self._lock:
             payload = build_set_my_temp_payload(self._protocol_version, temp_f)
-            await self._send_packet(payload)
-            await asyncio.sleep(0.2)
+            result = await self._send_packet(payload, wait_for_ack=True)
+            if result:
+                error_code, ack_payload = result
+                if error_code != 0:
+                    raise UpdateFailed(f"Device rejected set_my_temp command: error={error_code:02x}")
+                if len(ack_payload) > 1 and ack_payload[1] != 0xF3:  # CMD_SET_MY_TEMP
+                    _LOGGER.warning("ACK command mismatch: expected F3, got %02x", ack_payload[1])
 
     async def async_set_baby_formula(self, enabled: bool) -> None:
         """Set baby formula mode."""
         async with self._lock:
             payload = build_set_baby_formula_payload(self._protocol_version, enabled)
-            await self._send_packet(payload)
-            await asyncio.sleep(0.2)
+            result = await self._send_packet(payload, wait_for_ack=True)
+            if result:
+                error_code, ack_payload = result
+                if error_code != 0:
+                    raise UpdateFailed(f"Device rejected set_baby_formula command: error={error_code:02x}")
+                if len(ack_payload) > 1 and ack_payload[1] != 0xF5:  # CMD_SET_BABY_FORMULA
+                    _LOGGER.warning("ACK command mismatch: expected F5, got %02x", ack_payload[1])
 
     async def async_stop_heating(self) -> None:
         """Stop heating."""
         async with self._lock:
             payload = build_stop_payload(self._protocol_version)
-            await self._send_packet(payload)
-            await asyncio.sleep(0.2)
+            result = await self._send_packet(payload, wait_for_ack=True)
+            if result:
+                error_code, ack_payload = result
+                if error_code != 0:
+                    raise UpdateFailed(f"Device rejected stop command: error={error_code:02x}")
+                if len(ack_payload) > 1 and ack_payload[1] != 0xF4:  # CMD_STOP
+                    _LOGGER.warning("ACK command mismatch: expected F4, got %02x", ack_payload[1])
