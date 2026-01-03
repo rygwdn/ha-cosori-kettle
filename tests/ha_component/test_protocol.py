@@ -3,9 +3,8 @@ import pytest
 
 from cosori_kettle_ble.protocol import (
     CompactStatus,
-    Envelope,
     ExtendedStatus,
-    Frame,
+    _EnvelopeCompat as Envelope,
     build_compact_status_request_payload,
     build_hello_payload,
     build_register_payload,
