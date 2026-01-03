@@ -5,9 +5,7 @@ import sys
 
 from bleak import BleakScanner
 
-sys.path.insert(0, "../")
-
-from cosori_kettle import CosoriKettle
+from custom_components.cosori_kettle_ble.cosori_kettle import CosoriKettle
 
 
 async def main():

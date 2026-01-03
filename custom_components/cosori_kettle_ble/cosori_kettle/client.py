@@ -148,6 +148,46 @@ class CosoriKettleBLEClient:
                 future.set_result(payload)
                 _LOGGER.debug("ACK future completed for seq=%02x", seq)
 
+    async def _wait_for_ack(
+        self, frame: Frame, ack_future: asyncio.Future[bytes]
+    ) -> bytes:
+        """Wait for and validate ACK response.
+
+        Args:
+            frame: Original frame that was sent
+            ack_future: Future to wait on for ACK payload
+
+        Returns:
+            ACK payload
+
+        Raises:
+            asyncio.TimeoutError: If ACK timeout
+            ValueError: If ACK validation fails
+        """
+        try:
+            ack_payload = await asyncio.wait_for(ack_future, timeout=self._ack_timeout)
+
+            # Verify first 4 bytes match (command ID)
+            if len(frame.payload) >= 4 and len(ack_payload) >= 4:
+                sent_cmd = frame.payload[:4]
+                ack_cmd = ack_payload[:4]
+                if sent_cmd != ack_cmd:
+                    raise ValueError(
+                        f"ACK command mismatch: sent {sent_cmd.hex()}, got {ack_cmd.hex()}"
+                    )
+
+            # Extract error code/status from payload[4] if available
+            if len(ack_payload) > 4:
+                error_code = ack_payload[4]
+                if error_code != 0:
+                    _LOGGER.warning("Device returned error code: %02x", error_code)
+
+            return ack_payload
+
+        except asyncio.TimeoutError:
+            _LOGGER.error("Timeout waiting for ACK (seq=%02x)", frame.seq)
+            raise
+
     async def send_frame(self, frame: Frame, wait_for_ack: bool = True) -> bytes | None:
         """Send a frame to the device.
 
@@ -185,31 +225,7 @@ class CosoriKettleBLEClient:
 
                 # Wait for and validate ACK if needed
                 if wait_for_ack and ack_future:
-                    try:
-                        ack_payload = await asyncio.wait_for(
-                            ack_future, timeout=self._ack_timeout
-                        )
-
-                        # Verify first 4 bytes match (command ID)
-                        if len(frame.payload) >= 4 and len(ack_payload) >= 4:
-                            sent_cmd = frame.payload[:4]
-                            ack_cmd = ack_payload[:4]
-                            if sent_cmd != ack_cmd:
-                                raise ValueError(
-                                    f"ACK command mismatch: sent {sent_cmd.hex()}, got {ack_cmd.hex()}"
-                                )
-
-                        # Extract error code/status from payload[4] if available
-                        if len(ack_payload) > 4:
-                            error_code = ack_payload[4]
-                            if error_code != 0:
-                                _LOGGER.warning("Device returned error code: %02x", error_code)
-
-                        return ack_payload
-
-                    except asyncio.TimeoutError:
-                        _LOGGER.error("Timeout waiting for ACK (seq=%02x)", frame.seq)
-                        raise
+                    return await self._wait_for_ack(frame, ack_future)
 
             finally:
                 # Clean up pending ACK if not completed

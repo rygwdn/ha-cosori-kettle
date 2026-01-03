@@ -10,10 +10,7 @@ import sys
 
 from bleak import BleakScanner
 
-# Add parent directory to path for development
-sys.path.insert(0, "../")
-
-from cosori_kettle import CosoriKettle, ExtendedStatus
+from custom_components.cosori_kettle_ble.cosori_kettle import CosoriKettle, ExtendedStatus
 
 # Configure logging
 logging.basicConfig(

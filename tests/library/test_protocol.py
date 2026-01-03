@@ -1,7 +1,7 @@
 """Tests for the protocol module."""
 import pytest
 
-from cosori_kettle.protocol import (
+from custom_components.cosori_kettle_ble.cosori_kettle.protocol import (
     PROTOCOL_VERSION_V1,
     Frame,
     build_hello_frame,

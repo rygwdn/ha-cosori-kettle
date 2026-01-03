@@ -4,10 +4,10 @@ from pathlib import Path
 
 import pytest
 
-# Add custom_components to Python path to allow package imports
+# Add project root to Python path to allow imports from custom_components
 # We'll mock the Home Assistant imports below
-custom_components_path = Path(__file__).parent.parent.parent / "custom_components"
-sys.path.insert(0, str(custom_components_path))
+project_root = Path(__file__).parent.parent.parent
+sys.path.insert(0, str(project_root))
 
 # Mock homeassistant and bleak modules to avoid import errors
 from unittest.mock import MagicMock

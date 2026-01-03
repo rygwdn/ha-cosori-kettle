@@ -13,15 +13,20 @@ A standalone Python library for controlling Cosori Smart Kettles via Bluetooth L
 
 ## Installation
 
-```bash
-pip install cosori-kettle
+This library is embedded within the Home Assistant component. To use it:
+
+### In This Repository
+
+```python
+from custom_components.cosori_kettle_ble.cosori_kettle import CosoriKettle
 ```
 
-Or install from source:
+### Standalone Usage
+
+Copy the `custom_components/cosori_kettle_ble/cosori_kettle/` directory to your project and install the dependency:
 
 ```bash
-cd cosori_kettle
-pip install .
+pip install bleak>=0.21.0
 ```
 
 ## Quick Start
@@ -29,7 +34,7 @@ pip install .
 ```python
 import asyncio
 from bleak import BleakScanner
-from cosori_kettle import CosoriKettle
+from custom_components.cosori_kettle_ble.cosori_kettle import CosoriKettle
 
 async def main():
     # Find your kettle
@@ -63,7 +68,7 @@ asyncio.run(main())
 ### Status Monitoring
 
 ```python
-from cosori_kettle import CosoriKettle
+from custom_components.cosori_kettle_ble.cosori_kettle import CosoriKettle
 
 def on_status_update(status):
     print(f"Temp: {status.temp}°F, Heating: {status.stage > 0}")
@@ -76,8 +81,8 @@ async with CosoriKettle(device, mac, status_callback=on_status_update) as kettle
 ### Low-Level Protocol Access
 
 ```python
-from cosori_kettle import CosoriKettleBLEClient
-from cosori_kettle.protocol import (
+from custom_components.cosori_kettle_ble.cosori_kettle import CosoriKettleBLEClient
+from custom_components.cosori_kettle_ble.cosori_kettle.protocol import (
     build_status_request_frame,
     parse_extended_status,
     PROTOCOL_VERSION_V1
@@ -144,19 +149,17 @@ All temperatures are in Fahrenheit. The library handles:
 - On-base detection
 - Hold/keep-warm timer management
 
-See [PROTOCOL.md](../PROTOCOL.md) for complete protocol documentation.
+See [PROTOCOL.md](../../../PROTOCOL.md) for complete protocol documentation.
 
 ## Development
 
 ```bash
-# Install dev dependencies
-pip install -e ".[dev]"
+# Run library tests (from repository root)
+uv run --extra test pytest tests/library/ -v
 
-# Run tests
-pytest
-
-# Run example
-python examples/interactive.py
+# Run examples (from repository root)
+python examples/interactive.py [MAC_ADDRESS]
+python examples/simple.py
 ```
 
 ## License

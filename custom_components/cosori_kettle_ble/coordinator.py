@@ -25,7 +25,7 @@ from .const import (
     SERVICE_UUID,
     UPDATE_INTERVAL,
 )
-from .protocol import (
+from .cosori_kettle.protocol import (
     ExtendedStatus,
     Frame,
     build_hello_frame,

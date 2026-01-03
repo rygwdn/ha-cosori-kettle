@@ -14,12 +14,11 @@ The `cosori_kettle` package is a standalone, framework-independent Python librar
 ## Structure
 
 ```
-cosori_kettle/
+custom_components/cosori_kettle_ble/cosori_kettle/
 ├── __init__.py          # Public API exports
 ├── protocol.py          # Low-level BLE protocol (frames, parsing, checksums)
 ├── client.py            # BLE communication layer (using bleak)
 ├── kettle.py            # High-level kettle controller API
-├── pyproject.toml       # Package configuration
 └── README.md            # Library documentation
 ```
 
@@ -81,7 +80,7 @@ Methods:
 
 ```python
 from bleak import BleakScanner
-from cosori_kettle import CosoriKettle
+from custom_components.cosori_kettle_ble.cosori_kettle import CosoriKettle
 
 # Find and connect
 device = await BleakScanner.find_device_by_address("AA:BB:CC:DD:EE:FF")
@@ -106,8 +105,11 @@ async with CosoriKettle(device, mac, status_callback=on_status) as kettle:
 ### Low-Level Protocol Access
 
 ```python
-from cosori_kettle import CosoriKettleBLEClient
-from cosori_kettle.protocol import build_status_request_frame, PROTOCOL_VERSION_V1
+from custom_components.cosori_kettle_ble.cosori_kettle import CosoriKettleBLEClient
+from custom_components.cosori_kettle_ble.cosori_kettle.protocol import (
+    build_status_request_frame,
+    PROTOCOL_VERSION_V1
+)
 
 client = CosoriKettleBLEClient(device)
 await client.connect()
@@ -120,11 +122,12 @@ await client.disconnect()
 
 ## Integration with Home Assistant Component
 
-The Home Assistant component (`custom_components/cosori_kettle_ble/`) now imports from the standalone library:
+The library is now nested within the Home Assistant component at `custom_components/cosori_kettle_ble/cosori_kettle/`. The Home Assistant component modules import from it:
 
 ```python
-# custom_components/cosori_kettle_ble/protocol.py
-from cosori_kettle.protocol import (
+# custom_components/cosori_kettle_ble/coordinator.py
+from .cosori_kettle import CosoriKettle, ExtendedStatus
+from .cosori_kettle.protocol import (
     build_hello_frame,
     parse_extended_status,
     # ... etc
@@ -134,8 +137,9 @@ from cosori_kettle.protocol import (
 This means:
 - ✅ Single source of truth for protocol logic
 - ✅ Library can be tested independently
-- ✅ Easy to use outside Home Assistant
+- ✅ Easy to use outside Home Assistant (import from full path)
 - ✅ HA component benefits from library improvements
+- ✅ Simple relative imports within HA component
 
 ## Testing
 
@@ -145,7 +149,10 @@ The library has its own test suite:
 # Run library tests
 uv run --extra test pytest tests/library/ -v
 
-# Run all tests (library + HA component)
+# Run HA component tests
+uv run --extra test pytest tests/ha_component/ -v
+
+# Run all tests
 uv run --extra test pytest -v
 ```
 
@@ -185,27 +192,21 @@ Development dependencies:
 
 ## Installation
 
-### From Source
+### In This Project
 
-```bash
-cd cosori_kettle
-pip install .
-```
-
-### Development Mode
-
-```bash
-pip install -e ".[dev]"
-```
-
-### With uv (in this project)
-
-The library is already available since it's part of the monorepo:
+The library is embedded within the Home Assistant component. When working in this repository, you can import it directly:
 
 ```python
-# Just import it
-from cosori_kettle import CosoriKettle
+from custom_components.cosori_kettle_ble.cosori_kettle import CosoriKettle
 ```
+
+### Standalone Usage
+
+To use the library in another project, you can:
+
+1. Copy the `custom_components/cosori_kettle_ble/cosori_kettle/` directory to your project
+2. Install dependencies: `pip install bleak>=0.21.0`
+3. Import using the path where you placed it
 
 ## Protocol Details
 
@@ -243,18 +244,18 @@ The HA component provides:
 
 ```
 CosoriKettleBLE/
-├── cosori_kettle/              # Standalone library
-│   ├── __init__.py
-│   ├── protocol.py             # Pure Python, no dependencies
-│   ├── client.py               # Uses bleak
-│   ├── kettle.py               # High-level API
-│   └── README.md
 ├── custom_components/          # Home Assistant component
 │   └── cosori_kettle_ble/
-│       ├── __init__.py
-│       ├── protocol.py         # Re-exports from library
+│       ├── cosori_kettle/      # Nested standalone library
+│       │   ├── __init__.py     # Public API exports
+│       │   ├── protocol.py     # Pure Python, no dependencies
+│       │   ├── client.py       # Uses bleak
+│       │   ├── kettle.py       # High-level API
+│       │   └── README.md       # Library documentation
+│       ├── __init__.py         # HA component config
 │       ├── coordinator.py      # Uses library + HA APIs
-│       └── ...
+│       ├── climate.py          # Climate entity
+│       └── ...                 # Other HA entity platforms
 ├── examples/                   # Usage examples
 │   ├── interactive.py
 │   └── simple.py
