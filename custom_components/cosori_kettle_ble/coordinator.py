@@ -27,13 +27,14 @@ from .const import (
 )
 from .protocol import (
     ExtendedStatus,
-    build_hello_payload,
+    Frame,
+    build_hello_frame,
     build_packet,
-    build_set_baby_formula_payload,
-    build_set_mode_payload,
-    build_set_my_temp_payload,
-    build_status_request_payload,
-    build_stop_payload,
+    build_set_baby_formula_frame,
+    build_set_mode_frame,
+    build_set_my_temp_frame,
+    build_status_request_frame,
+    build_stop_frame,
     split_into_packets,
     parse_extended_status,
     parse_frames,
@@ -198,17 +199,15 @@ class CosoriKettleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def _send_hello(self) -> None:
         """Send hello packet."""
-        payload = build_hello_payload(self._protocol_version, self._registration_key)
-        await self._send_frame(payload)
+        frame = build_hello_frame(self._protocol_version, self._registration_key, self._tx_seq)
+        self._tx_seq = (self._tx_seq + 1) & 0xFF
+        await self._send_frame(frame)
 
-    async def _send_frame(
-        self, payload: bytes, frame_type: int = MESSAGE_HEADER_TYPE
-    ) -> bytes | None:
+    async def _send_frame(self, frame: Frame) -> bytes | None:
         """Send a frame to the device.
 
         Args:
-            payload: The payload to send
-            frame_type: Frame type (MESSAGE_HEADER_TYPE or ACK_HEADER_TYPE)
+            frame: Frame to send
 
         Returns:
             ACK payload if waiting for ACK, None otherwise
@@ -220,18 +219,16 @@ class CosoriKettleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             raise UpdateFailed("Not connected to device")
 
         # Determine if we should wait for ACK (default yes unless frame type is ACK)
-        wait_for_ack = frame_type != ACK_HEADER_TYPE
+        wait_for_ack = frame.frame_type != ACK_HEADER_TYPE
 
         # Build packet
-        packet = build_packet(frame_type, self._tx_seq, payload)
-        seq = self._tx_seq
-        self._tx_seq = (self._tx_seq + 1) & 0xFF
+        packet = build_packet(frame)
 
         # Create future for ACK if needed
         ack_future: asyncio.Future[bytes] | None = None
         if wait_for_ack:
             ack_future = asyncio.Future()
-            self._pending_ack[seq] = ack_future
+            self._pending_ack[frame.seq] = ack_future
 
         try:
             # Send packet in chunks
@@ -248,8 +245,8 @@ class CosoriKettleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     )
 
                     # Verify first 4 bytes match (command ID)
-                    if len(payload) >= 4 and len(ack_payload) >= 4:
-                        sent_cmd = payload[:4]
+                    if len(frame.payload) >= 4 and len(ack_payload) >= 4:
+                        sent_cmd = frame.payload[:4]
                         ack_cmd = ack_payload[:4]
                         if sent_cmd != ack_cmd:
                             raise UpdateFailed(
@@ -265,13 +262,13 @@ class CosoriKettleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     return ack_payload
 
                 except asyncio.TimeoutError:
-                    _LOGGER.error("Timeout waiting for ACK (seq=%02x)", seq)
-                    raise UpdateFailed(f"Timeout waiting for ACK (seq={seq:02x})")
+                    _LOGGER.error("Timeout waiting for ACK (seq=%02x)", frame.seq)
+                    raise UpdateFailed(f"Timeout waiting for ACK (seq={frame.seq:02x})")
 
         finally:
             # Clean up pending ACK if not completed
-            if wait_for_ack and seq in self._pending_ack:
-                self._pending_ack.pop(seq, None)
+            if wait_for_ack and frame.seq in self._pending_ack:
+                self._pending_ack.pop(frame.seq, None)
 
         return None
 
@@ -284,8 +281,9 @@ class CosoriKettleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     await self._connect()
 
                 # Request status
-                payload = build_status_request_payload(self._protocol_version)
-                await self._send_frame(payload)
+                frame = build_status_request_frame(self._protocol_version, self._tx_seq)
+                self._tx_seq = (self._tx_seq + 1) & 0xFF
+                await self._send_frame(frame)
 
                 # Wait for response
                 await asyncio.sleep(0.5)
@@ -301,23 +299,27 @@ class CosoriKettleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def async_set_mode(self, mode: int, temp_f: int, hold_time: int) -> None:
         """Set heating mode."""
         async with self._lock:
-            payload = build_set_mode_payload(self._protocol_version, mode, temp_f, hold_time)
-            await self._send_frame(payload)
+            frame = build_set_mode_frame(self._protocol_version, mode, temp_f, hold_time, self._tx_seq)
+            self._tx_seq = (self._tx_seq + 1) & 0xFF
+            await self._send_frame(frame)
 
     async def async_set_my_temp(self, temp_f: int) -> None:
         """Set my temp."""
         async with self._lock:
-            payload = build_set_my_temp_payload(self._protocol_version, temp_f)
-            await self._send_frame(payload)
+            frame = build_set_my_temp_frame(self._protocol_version, temp_f, self._tx_seq)
+            self._tx_seq = (self._tx_seq + 1) & 0xFF
+            await self._send_frame(frame)
 
     async def async_set_baby_formula(self, enabled: bool) -> None:
         """Set baby formula mode."""
         async with self._lock:
-            payload = build_set_baby_formula_payload(self._protocol_version, enabled)
-            await self._send_frame(payload)
+            frame = build_set_baby_formula_frame(self._protocol_version, enabled, self._tx_seq)
+            self._tx_seq = (self._tx_seq + 1) & 0xFF
+            await self._send_frame(frame)
 
     async def async_stop_heating(self) -> None:
         """Stop heating."""
         async with self._lock:
-            payload = build_stop_payload(self._protocol_version)
-            await self._send_frame(payload)
+            frame = build_stop_frame(self._protocol_version, self._tx_seq)
+            self._tx_seq = (self._tx_seq + 1) & 0xFF
+            await self._send_frame(frame)

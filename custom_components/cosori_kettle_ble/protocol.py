@@ -67,29 +67,27 @@ class Frame:
     payload: bytes
 
 
-def build_packet(frame_type: int, seq: int, payload: bytes) -> bytes:
+def build_packet(frame: Frame) -> bytes:
     """Build a complete packet with envelope header.
 
     Args:
-        frame_type: Frame type (MESSAGE_HEADER_TYPE or ACK_HEADER_TYPE)
-        seq: Sequence number
-        payload: Payload bytes
+        frame: Frame object with type, sequence, and payload
 
     Returns:
         Complete packet with envelope header and checksum
     """
-    payload_len = len(payload)
+    payload_len = len(frame.payload)
     packet = bytearray(6 + payload_len)
 
     packet[0] = FRAME_MAGIC
-    packet[1] = frame_type
-    packet[2] = seq
+    packet[1] = frame.frame_type
+    packet[2] = frame.seq
     packet[3] = payload_len & 0xFF
     packet[4] = (payload_len >> 8) & 0xFF
     packet[5] = 0x01  # Placeholder, will be calculated
 
-    if payload:
-        packet[6:] = payload
+    if frame.payload:
+        packet[6:] = frame.payload
 
     # Calculate and set checksum
     packet[5] = _calculate_checksum(packet)
@@ -198,8 +196,8 @@ def _calculate_checksum(buffer: bytes | bytearray) -> int:
         return (FRAME_MAGIC + buffer[1] + buffer[2] + buffer[3] + buffer[4]) & 0xFF
 
 
-def build_register_payload(protocol_version: int, registration_key: bytes) -> bytes:
-    """Build register/pairing payload."""
+def build_register_frame(protocol_version: int, registration_key: bytes, seq: int = 0) -> Frame:
+    """Build register/pairing frame."""
     if len(registration_key) != 16:
         raise ValueError("Registration key must be 16 bytes")
 
@@ -213,11 +211,11 @@ def build_register_payload(protocol_version: int, registration_key: bytes) -> by
     hex_key = registration_key.hex()
     payload[4:] = hex_key.encode("ascii")
 
-    return bytes(payload)
+    return Frame(frame_type=MESSAGE_HEADER_TYPE, seq=seq, payload=bytes(payload))
 
 
-def build_hello_payload(protocol_version: int, registration_key: bytes) -> bytes:
-    """Build hello/reconnect payload."""
+def build_hello_frame(protocol_version: int, registration_key: bytes, seq: int = 0) -> Frame:
+    """Build hello/reconnect frame."""
     if len(registration_key) != 16:
         raise ValueError("Registration key must be 16 bytes")
 
@@ -231,34 +229,38 @@ def build_hello_payload(protocol_version: int, registration_key: bytes) -> bytes
     hex_key = registration_key.hex()
     payload[4:] = hex_key.encode("ascii")
 
-    return bytes(payload)
+    return Frame(frame_type=MESSAGE_HEADER_TYPE, seq=seq, payload=bytes(payload))
 
 
-def build_status_request_payload(protocol_version: int) -> bytes:
-    """Build status request (POLL) payload."""
-    return bytes([protocol_version, CMD_POLL, CMD_TYPE_40, 0x00])
+def build_status_request_frame(protocol_version: int, seq: int = 0) -> Frame:
+    """Build status request (POLL) frame."""
+    payload = bytes([protocol_version, CMD_POLL, CMD_TYPE_40, 0x00])
+    return Frame(frame_type=MESSAGE_HEADER_TYPE, seq=seq, payload=payload)
 
 
-def build_compact_status_request_payload(protocol_version: int) -> bytes:
-    """Build compact status request (CTRL) payload."""
-    return bytes([protocol_version, CMD_CTRL, CMD_TYPE_40, 0x00])
+def build_compact_status_request_frame(protocol_version: int, seq: int = 0) -> Frame:
+    """Build compact status request (CTRL) frame."""
+    payload = bytes([protocol_version, CMD_CTRL, CMD_TYPE_40, 0x00])
+    return Frame(frame_type=MESSAGE_HEADER_TYPE, seq=seq, payload=payload)
 
 
-def build_set_my_temp_payload(protocol_version: int, temp_f: int) -> bytes:
-    """Build set my temp payload."""
+def build_set_my_temp_frame(protocol_version: int, temp_f: int, seq: int = 0) -> Frame:
+    """Build set my temp frame."""
     # Clamp to valid range
     temp_f = max(MIN_TEMP_F, min(MAX_TEMP_F, temp_f))
-    return bytes([protocol_version, CMD_SET_MY_TEMP, CMD_TYPE_A3, 0x00, temp_f])
+    payload = bytes([protocol_version, CMD_SET_MY_TEMP, CMD_TYPE_A3, 0x00, temp_f])
+    return Frame(frame_type=MESSAGE_HEADER_TYPE, seq=seq, payload=payload)
 
 
-def build_set_baby_formula_payload(protocol_version: int, enabled: bool) -> bytes:
-    """Build set baby formula payload."""
-    return bytes([protocol_version, CMD_SET_BABY_FORMULA, CMD_TYPE_A3, 0x00, 0x01 if enabled else 0x00])
+def build_set_baby_formula_frame(protocol_version: int, enabled: bool, seq: int = 0) -> Frame:
+    """Build set baby formula frame."""
+    payload = bytes([protocol_version, CMD_SET_BABY_FORMULA, CMD_TYPE_A3, 0x00, 0x01 if enabled else 0x00])
+    return Frame(frame_type=MESSAGE_HEADER_TYPE, seq=seq, payload=payload)
 
 
-def build_set_hold_time_payload(protocol_version: int, seconds: int) -> bytes:
-    """Build set hold time payload."""
-    return bytes([
+def build_set_hold_time_frame(protocol_version: int, seconds: int, seq: int = 0) -> Frame:
+    """Build set hold time frame."""
+    payload = bytes([
         protocol_version,
         CMD_SET_HOLD_TIME,
         CMD_TYPE_A3,
@@ -268,13 +270,14 @@ def build_set_hold_time_payload(protocol_version: int, seconds: int) -> bytes:
         seconds & 0xFF,
         (seconds >> 8) & 0xFF,
     ])
+    return Frame(frame_type=MESSAGE_HEADER_TYPE, seq=seq, payload=payload)
 
 
-def build_set_mode_payload(
-    protocol_version: int, mode: int, temp_f: int, hold_time_seconds: int
-) -> bytes:
-    """Build set mode payload."""
-    return bytes([
+def build_set_mode_frame(
+    protocol_version: int, mode: int, temp_f: int, hold_time_seconds: int, seq: int = 0
+) -> Frame:
+    """Build set mode frame."""
+    payload = bytes([
         protocol_version,
         CMD_SET_MODE,
         CMD_TYPE_A3,
@@ -285,11 +288,13 @@ def build_set_mode_payload(
         (hold_time_seconds >> 8) & 0xFF,
         hold_time_seconds & 0xFF,
     ])
+    return Frame(frame_type=MESSAGE_HEADER_TYPE, seq=seq, payload=payload)
 
 
-def build_stop_payload(protocol_version: int) -> bytes:
-    """Build stop payload."""
-    return bytes([protocol_version, CMD_STOP, CMD_TYPE_A3, 0x00])
+def build_stop_frame(protocol_version: int, seq: int = 0) -> Frame:
+    """Build stop frame."""
+    payload = bytes([protocol_version, CMD_STOP, CMD_TYPE_A3, 0x00])
+    return Frame(frame_type=MESSAGE_HEADER_TYPE, seq=seq, payload=payload)
 
 
 def parse_compact_status(payload: bytes) -> CompactStatus:
