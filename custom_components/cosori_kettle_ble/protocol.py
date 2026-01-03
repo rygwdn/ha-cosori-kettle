@@ -56,20 +56,15 @@ class ExtendedStatus:
 
 
 @dataclass
-class Envelope:
-    """BLE packet envelope (frame with header).
+class Frame:
+    """BLE packet frame with header.
 
     Represents a single frame with type, sequence number, and payload.
-    Supports tuple unpacking for backward compatibility.
     """
 
     frame_type: int
     seq: int
     payload: bytes
-
-    def __iter__(self):
-        """Support tuple unpacking for backward compatibility."""
-        return iter((self.frame_type, self.seq, self.payload))
 
 
 def build_packet(frame_type: int, seq: int, payload: bytes) -> bytes:
@@ -102,19 +97,19 @@ def build_packet(frame_type: int, seq: int, payload: bytes) -> bytes:
     return bytes(packet)
 
 
-def chunk_packet(packet: bytes) -> list[bytes]:
-    """Split packet into BLE-sized chunks.
+def split_into_packets(packet: bytes) -> list[bytes]:
+    """Split packet into BLE-sized packets.
 
     Args:
         packet: Complete packet to split
 
     Returns:
-        List of chunks, each <= BLE_CHUNK_SIZE bytes
+        List of packets, each <= BLE_CHUNK_SIZE bytes
     """
     return [packet[i : i + BLE_CHUNK_SIZE] for i in range(0, len(packet), BLE_CHUNK_SIZE)]
 
 
-def parse_frames(buffer: bytearray, max_payload_size: int = 512) -> tuple[list[Envelope], int]:
+def parse_frames(buffer: bytearray, max_payload_size: int = 512) -> tuple[list[Frame], int]:
     """Parse all complete frames from buffer.
 
     Args:
@@ -167,9 +162,9 @@ def parse_frames(buffer: bytearray, max_payload_size: int = 512) -> tuple[list[E
             pos += 1
             continue
 
-        # Extract payload and create envelope
+        # Extract payload and create frame
         payload = bytes(frame_data[6:])
-        frames.append(Envelope(frame_type=frame_type, seq=seq, payload=payload))
+        frames.append(Frame(frame_type=frame_type, seq=seq, payload=payload))
 
         pos += frame_len
 
@@ -201,87 +196,6 @@ def _calculate_checksum(buffer: bytes | bytearray) -> int:
         if len(buffer) < 6:
             return 0
         return (FRAME_MAGIC + buffer[1] + buffer[2] + buffer[3] + buffer[4]) & 0xFF
-
-
-# Backward compatibility alias
-Frame = Envelope
-
-
-class _EnvelopeCompat:
-    """Backward compatibility wrapper for old Envelope API used in tests."""
-
-    def __init__(self):
-        """Initialize compatibility wrapper."""
-        self._buffer = bytearray()
-        self._packet = b""
-
-    def set_message_payload(self, seq: int, payload: bytes) -> bytes:
-        """Build message packet (backward compat)."""
-        self._packet = build_packet(MESSAGE_HEADER_TYPE, seq, payload)
-        return self._packet
-
-    def append(self, data: bytes) -> None:
-        """Append data to buffer (backward compat)."""
-        self._buffer.extend(data)
-
-    def process_next_frame(self, max_payload_size: int = 512) -> Envelope | None:
-        """Process next frame (backward compat)."""
-        # Parse frames from current buffer
-        pos = 0
-        while pos < len(self._buffer):
-            # Find frame start
-            frame_start = _find_frame_start(self._buffer, pos)
-            if frame_start >= len(self._buffer):
-                break
-
-            pos = frame_start
-
-            # Validate header
-            if pos + 6 > len(self._buffer):
-                break
-
-            if self._buffer[pos] != FRAME_MAGIC:
-                pos += 1
-                continue
-
-            frame_type = self._buffer[pos + 1]
-            seq = self._buffer[pos + 2]
-            payload_len = self._buffer[pos + 3] | (self._buffer[pos + 4] << 8)
-            checksum = self._buffer[pos + 5]
-
-            # Validate payload length
-            if payload_len > max_payload_size:
-                pos += 1
-                continue
-
-            frame_len = 6 + payload_len
-
-            # Wait for complete frame
-            if pos + frame_len > len(self._buffer):
-                break
-
-            # Validate checksum
-            frame_data = self._buffer[pos : pos + frame_len]
-            calculated_checksum = _calculate_checksum(frame_data)
-
-            if checksum != calculated_checksum:
-                pos += 1
-                continue
-
-            # Extract payload and create envelope
-            payload = bytes(frame_data[6:])
-            envelope = Envelope(frame_type=frame_type, seq=seq, payload=payload)
-
-            # Remove consumed bytes (up to and including this frame)
-            self._buffer = self._buffer[pos + frame_len :]
-
-            return envelope
-
-        return None
-
-    def get_chunks(self) -> list[bytes]:
-        """Get packet chunks (backward compat)."""
-        return chunk_packet(self._packet)
 
 
 def build_register_payload(protocol_version: int, registration_key: bytes) -> bytes:

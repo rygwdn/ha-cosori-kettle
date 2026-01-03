@@ -199,12 +199,12 @@ class CosoriKettleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def _send_hello(self) -> None:
         """Send hello packet."""
         payload = build_hello_payload(self._protocol_version, self._registration_key)
-        await self._send_packet(payload)
+        await self._send_frame(payload)
 
-    async def _send_packet(
+    async def _send_frame(
         self, payload: bytes, frame_type: int = MESSAGE_HEADER_TYPE
     ) -> bytes | None:
-        """Send a packet to the device.
+        """Send a frame to the device.
 
         Args:
             payload: The payload to send
@@ -285,7 +285,7 @@ class CosoriKettleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
                 # Request status
                 payload = build_status_request_payload(self._protocol_version)
-                await self._send_packet(payload)
+                await self._send_frame(payload)
 
                 # Wait for response
                 await asyncio.sleep(0.5)
@@ -302,22 +302,22 @@ class CosoriKettleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Set heating mode."""
         async with self._lock:
             payload = build_set_mode_payload(self._protocol_version, mode, temp_f, hold_time)
-            await self._send_packet(payload)
+            await self._send_frame(payload)
 
     async def async_set_my_temp(self, temp_f: int) -> None:
         """Set my temp."""
         async with self._lock:
             payload = build_set_my_temp_payload(self._protocol_version, temp_f)
-            await self._send_packet(payload)
+            await self._send_frame(payload)
 
     async def async_set_baby_formula(self, enabled: bool) -> None:
         """Set baby formula mode."""
         async with self._lock:
             payload = build_set_baby_formula_payload(self._protocol_version, enabled)
-            await self._send_packet(payload)
+            await self._send_frame(payload)
 
     async def async_stop_heating(self) -> None:
         """Stop heating."""
         async with self._lock:
             payload = build_stop_payload(self._protocol_version)
-            await self._send_packet(payload)
+            await self._send_frame(payload)
