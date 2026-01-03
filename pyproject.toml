@@ -7,6 +7,7 @@ requires-python = "~=3.13.0"
 dependencies = [
     "esphome>=2025.12.3",
     "pip>=25.3",
+    "bleak>=0.21.0",
 ]
 
 [project.optional-dependencies]
@@ -17,7 +18,7 @@ test = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["tests/ha_component"]
+testpaths = ["tests/ha_component", "tests/library"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
