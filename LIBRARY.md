@@ -1,15 +1,6 @@
-# Cosori Kettle Standalone Library
+# Cosori Kettle Python Library
 
-This document describes the standalone Python library extracted from the Home Assistant component.
-
-## Overview
-
-The `cosori_kettle` package is a standalone, framework-independent Python library for controlling Cosori Smart Kettles via Bluetooth Low Energy. It can be used independently of Home Assistant for:
-
-- Interactive control scripts
-- Automation tools
-- Testing and development
-- Integration with other home automation systems
+A standalone Python library for controlling Cosori Smart Kettles via Bluetooth Low Energy, embedded within the Home Assistant component.
 
 ## Structure
 
@@ -120,26 +111,9 @@ await client.send_frame(frame)
 await client.disconnect()
 ```
 
-## Integration with Home Assistant Component
+## Integration
 
-The library is now nested within the Home Assistant component at `custom_components/cosori_kettle_ble/cosori_kettle/`. The Home Assistant component modules import from it:
-
-```python
-# custom_components/cosori_kettle_ble/coordinator.py
-from .cosori_kettle import CosoriKettle, ExtendedStatus
-from .cosori_kettle.protocol import (
-    build_hello_frame,
-    parse_extended_status,
-    # ... etc
-)
-```
-
-This means:
-- ✅ Single source of truth for protocol logic
-- ✅ Library can be tested independently
-- ✅ Easy to use outside Home Assistant (import from full path)
-- ✅ HA component benefits from library improvements
-- ✅ Simple relative imports within HA component
+The library is embedded within the Home Assistant component at `custom_components/cosori_kettle_ble/cosori_kettle/`, providing a single source of truth for protocol logic that can be tested independently.
 
 ## Testing
 
@@ -210,81 +184,10 @@ To use the library in another project, you can:
 
 ## Protocol Details
 
-All temperatures are in Fahrenheit. The library handles:
-
-- ✅ BLE packet framing (6-byte header + payload)
-- ✅ Checksum calculation (V0 and V1 protocols)
-- ✅ **Automatic protocol version detection** from HW/SW version
-- ✅ BLE Device Information Service reading
-- ✅ Request/response with ACK handling
-- ✅ 20-byte BLE chunking for TX
-- ✅ Status parsing (compact and extended formats)
-- ✅ On-base detection (byte 14 of extended status)
-- ✅ Hold/keep-warm timer management
-- ✅ Temperature validation (40-230°F sensor range)
-
-### Protocol Version Detection
-
-The library automatically detects the protocol version by reading from the BLE Device Information Service:
-- Reads hardware revision (`0x2A27`) and software revision (`0x2A28`)
-- Parses version strings (e.g., HW: "1.0.00", SW: "R0007V0012")
-- Selects V0 for older firmware (< R0007V0012) or V1 for newer
-- Defaults to V1 if version info unavailable
+All temperatures are in Fahrenheit. The library automatically detects protocol version (V0/V1) from firmware version and handles all BLE communication details.
 
 See [PROTOCOL.md](PROTOCOL.md) for complete protocol documentation.
 
-## Architecture Decisions
-
-### Why Separate the Library?
-
-1. **Reusability**: Can be used in non-HA contexts
-2. **Testing**: Library can be tested independently
-3. **Development**: Easier to develop and debug standalone
-4. **Documentation**: Clear API for external users
-5. **Packaging**: Can be published to PyPI if desired
-
-### Why Keep HA Component?
-
-The HA component provides:
-- Home Assistant integration (entities, config flow, etc.)
-- HA-specific features (discovery, MQTT, etc.)
-- Backward compatibility for existing users
-
-### Directory Layout
-
-```
-CosoriKettleBLE/
-├── custom_components/          # Home Assistant component
-│   └── cosori_kettle_ble/
-│       ├── cosori_kettle/      # Nested standalone library
-│       │   ├── __init__.py     # Public API exports
-│       │   ├── protocol.py     # Pure Python, no dependencies
-│       │   ├── client.py       # Uses bleak
-│       │   ├── kettle.py       # High-level API
-│       │   └── README.md       # Library documentation
-│       ├── __init__.py         # HA component config
-│       ├── coordinator.py      # Uses library + HA APIs
-│       ├── climate.py          # Climate entity
-│       └── ...                 # Other HA entity platforms
-├── examples/                   # Usage examples
-│   ├── interactive.py
-│   └── simple.py
-├── tests/
-│   ├── library/                # Library tests
-│   └── ha_component/           # HA component tests
-└── README.md
-```
-
-## Future Enhancements
-
-Potential improvements:
-- [ ] Publish to PyPI as `cosori-kettle`
-- [ ] Add connection retry logic with exponential backoff
-- [ ] Support for delayed start commands (V1 protocol)
-- [ ] Support for baby formula mode
-- [ ] Device discovery helper
-- [ ] Async iterators for status streaming
-- [ ] Type stubs for better IDE support
 
 ## License
 

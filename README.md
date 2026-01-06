@@ -1,25 +1,38 @@
-# ESPHome Cosori Kettle BLE Component
+# Cosori Kettle BLE
 
-Control your Cosori smart kettle from Home Assistant using an ESP32 and BLE.
+Control your Cosori smart kettle from Home Assistant via Bluetooth Low Energy. Two integration options:
+
+1. **ESPHome Component** - Use an ESP32 as a BLE bridge
+2. **Home Assistant Integration** - Direct BLE connection from Home Assistant
 
 ## Features
 
 - **Real-time monitoring**: Temperature, setpoint, on-base status, heating state
 - **Remote control**: Start/stop heating, adjust target temperature (104-212°F)
-- **Persistent connection**: Auto-reconnect on disconnect
-- **BLE connection toggle**: Disable BLE to use official mobile app (kettle only supports 1 connection)
-- **Home Assistant integration**: Native entities (sensors, switches, numbers)
-- **Automation-ready**: Use in HA automations, scripts, and scenes
+- **Climate entity**: Native thermostat card with preset modes (Boil, Green Tea, Oolong, Coffee)
+- **Automation-ready**: Full Home Assistant integration
+- **Automatic protocol detection**: Supports V0 and V1 firmware versions
+
+## Hardware Compatibility
+
+- **Cosori Electric Gooseneck Kettle** with BLE: https://www.amazon.com/COSORI-Electric-Gooseneck-Variable-Stainless/dp/B07T1CH2HH
+
+**IMPORTANT:** The kettle only supports ONE BLE connection at a time. Disconnect from the official app or other devices before connecting.
+
+---
+
+# Option 1: ESPHome Component
+
+Use an ESP32 board as a BLE bridge to Home Assistant.
 
 ## Hardware Requirements
 
-- **ESP32** board with Bluetooth LE support (e.g., ESP32-DevKitC, ESP32-WROOM-32)
-- **Cosori smart kettle** with BLE: https://www.amazon.com/COSORI-Electric-Gooseneck-Variable-Stainless/dp/B07T1CH2HH
-- Stable power supply for ESP32
+- ESP32 board with Bluetooth LE (e.g., ESP32-DevKitC, ESP32-WROOM-32)
+- Stable 5V power supply for ESP32
 
 ## Quick Start
 
-**Copy this complete configuration, change the MAC address, and flash to your ESP32:**
+**Copy this configuration, change the MAC address, and flash to your ESP32:**
 
 ```yaml
 esphome:
@@ -102,28 +115,86 @@ switch:
       name: "Kettle BLE Connection"
 ```
 
-**That's it!** Just find your kettle's MAC address (see below) and you're ready to go.
+See [cosori-kettle-example.yaml](cosori-kettle-example.yaml) for a complete configuration.
+
+---
+
+# Option 2: Home Assistant Integration
+
+Direct BLE connection from Home Assistant (no ESP32 required).
+
+## Installation
+
+### HACS (Recommended)
+
+1. Add this repository to HACS as a custom repository
+2. Install "Cosori Kettle BLE" from HACS
+3. Restart Home Assistant
+4. Go to Settings > Devices & Services > Add Integration
+5. Search for "Cosori Kettle BLE"
+
+### Manual Installation
+
+1. Copy `custom_components/cosori_kettle_ble` to your Home Assistant `custom_components` folder
+2. Restart Home Assistant
+3. Go to Settings > Devices & Services > Add Integration
+4. Search for "Cosori Kettle BLE"
+
+## Configuration
+
+The integration supports automatic Bluetooth discovery. Your kettle must be:
+- Powered on and on its base
+- Within Bluetooth range
+- **NOT connected to another device** (disconnect from official app first)
+
+---
+
+# Finding Your Kettle's MAC Address
+
+**IMPORTANT:** The kettle will only appear in BLE scans if it's NOT already connected to another device (official app, another ESP32, or Home Assistant integration). Disconnect from other devices first.
+
+### Using `bluetoothctl` (Linux)
+
+```bash
+sudo bluetoothctl
+scan on
+# Look for your kettle (usually shows as "Cosori" or similar)
+# Note the MAC address (e.g., C4:A9:B8:73:AB:29)
+scan off
+exit
+```
+
+### Using BLE Scanner App
+
+- **iOS**: "BLE Scanner" or "LightBlue"
+- **Android**: "nRF Connect" or "BLE Scanner"
+
+### Using Python Script
+
+```bash
+./scan.py
+```
+
+---
+
+# Home Assistant Integration
 
 ## Climate Entity & Thermostat Card
 
-The kettle **automatically appears as a climate entity** in Home Assistant when you add the component! This means you can use the beautiful native **thermostat card** with its semi-circle temperature slider right away.
-
-### Home Assistant Integration
-
-Here's what the integration looks like in Home Assistant:
+Both integration methods automatically create a climate entity in Home Assistant, allowing you to use the native thermostat card with its semi-circle temperature slider.
 
 ![Home Assistant Integration](Screenshot.png)
 
-The component provides:
-- **Climate entity** (Kettle) - Off/Heat mode with temperature control
-- **Switches** - BLE Connection toggle, Heating control
+### Provided Entities
+
+- **Climate entity** - Off/Heat mode with temperature control and preset modes
 - **Sensors** - Temperature, Setpoint, On Base status, Heating status
+- **Switches** - BLE Connection toggle (ESPHome), Heating control
 - **Number slider** - Target temperature adjustment (104-212°F)
 
 ### Customizing the Climate Entity Name
 
-In your ESPHome config, you can optionally set a name for the climate entity:
-
+**ESPHome:**
 ```yaml
 cosori_kettle_ble:
   ble_client_id: cosori_kettle_client
@@ -133,107 +204,52 @@ cosori_kettle_ble:
 
 ### Using the Thermostat Card
 
-Add this to your Lovelace dashboard:
+Add to your Lovelace dashboard:
 
 ```yaml
 type: thermostat
-entity: climate.kettle  # or whatever name you chose
+entity: climate.kettle  # or climate.cosori_kettle for HA integration
 ```
 
 The thermostat card provides:
 - **Semi-circle temperature slider** (40-100°C / 104-212°F)
 - **Current temperature** display
 - **Mode control** (OFF / HEAT)
+- **Preset modes** (Boil, Green Tea, Oolong, Coffee)
 - **Action indicator** (IDLE / HEATING)
 
 ### How It Works
 
 - **OFF mode**: Kettle is idle, not heating
 - **HEAT mode**: Kettle will heat to target temperature
-- **Temperature slider**: Adjust target temperature (40-100°C / 104-212°F)
+- **Preset modes**:
+  - Boil: 212°F
+  - Green Tea: 180°F
+  - Oolong: 195°F
+  - Coffee: 205°F
+- **Temperature slider**: Adjust custom temperature (40-100°C / 104-212°F)
 - **Current temperature**: Shows actual water temperature
 - **Action**: Shows HEATING when actively warming, IDLE otherwise
 
-**Note:** Home Assistant will display temperatures in your preferred unit (Celsius or Fahrenheit). The kettle natively uses Fahrenheit, and all conversions are handled automatically.
+**Note:** Home Assistant displays temperatures in your preferred unit (Celsius or Fahrenheit). The kettle natively uses Fahrenheit, and all conversions are handled automatically.
 
-### Alternative: Individual Entities
+---
 
-You can also use the individual entities (sensors, switches, numbers) for more granular control or custom card designs. Both approaches work simultaneously!
+# Usage Examples
 
-## Finding Your Kettle's MAC Address
+## Starting the Kettle
 
-### Method 1: Using `bluetoothctl` (Linux)
-
-```bash
-sudo bluetoothctl
-scan on
-# Look for your kettle in the list (usually shows as "Cosori" or similar)
-# Note the MAC address (e.g., C4:A9:B8:73:AB:29)
-scan off
-exit
+**Using Climate Entity (Recommended):**
+```yaml
+service: climate.set_preset_mode
+target:
+  entity_id: climate.kettle
+data:
+  preset_mode: boil  # or green_tea, oolong, coffee
 ```
 
-### Method 2: Using BLE Scanner App
-
-- **iOS**: Download "BLE Scanner" or "LightBlue"
-- **Android**: Download "nRF Connect" or "BLE Scanner"
-- Scan for devices and look for your kettle
-- Note the MAC address
-
-### Method 3: Using Python Script
-
-```python
-#!/usr/bin/env python3
-import asyncio
-from bleak import BleakScanner
-
-async def main():
-    devices = await BleakScanner.discover()
-    for d in devices:
-        if "cosori" in d.name.lower() or "kettle" in d.name.lower():
-            print(f"Found: {d.name} - {d.address}")
-
-asyncio.run(main())
-```
-
-## Advanced Configuration
-
-See [cosori-kettle-example.yaml](cosori-kettle-example.yaml) for a complete configuration example.
-
-## Entities
-
-### Sensors
-
-| Entity | Type | Description | Unit |
-|--------|------|-------------|------|
-| `temperature` | Sensor | Current water temperature | °F |
-| `kettle_setpoint` | Sensor | Actual setpoint on kettle | °F |
-
-### Binary Sensors
-
-| Entity | Type | Description |
-|--------|------|-------------|
-| `on_base` | Binary Sensor | True if kettle is on charging base |
-| `heating` | Binary Sensor | True if kettle is actively heating |
-
-### Numbers
-
-| Entity | Type | Description | Range |
-|--------|------|-------------|-------|
-| `target_setpoint` | Number | User-adjustable target temperature | 104-212°F |
-
-### Switches
-
-| Entity | Type | Description |
-|--------|------|-------------|
-| `heating_switch` | Switch | Start/stop heating (uses target_setpoint) |
-| `ble_connection_switch` | Switch | Enable/disable BLE connection |
-
-## Usage
-
-### Starting the Kettle
-
-1. **Set target temperature**:
+**Using Individual Entities:**
+1. Set target temperature:
    ```yaml
    service: number.set_value
    target:
@@ -242,32 +258,26 @@ See [cosori-kettle-example.yaml](cosori-kettle-example.yaml) for a complete conf
      value: 180
    ```
 
-2. **Turn on heating switch**:
+2. Turn on heating:
    ```yaml
    service: switch.turn_on
    target:
      entity_id: switch.kettle_heating
    ```
 
-### Stopping the Kettle
+## Stopping the Kettle
 
 ```yaml
-service: switch.turn_off
+service: climate.set_hvac_mode
 target:
-  entity_id: switch.kettle_heating
+  entity_id: climate.kettle
+data:
+  hvac_mode: "off"
 ```
-
-### Using Official Mobile App
-
-To use the official Cosori mobile app (which requires exclusive BLE access):
-
-1. Turn off BLE connection switch in Home Assistant
-2. Use the mobile app as normal
-3. Turn on BLE connection switch when done
 
 ## Home Assistant Automations
 
-### Example 1: Morning Kettle Automation
+### Morning Kettle Automation
 
 ```yaml
 automation:
@@ -280,17 +290,14 @@ automation:
         entity_id: binary_sensor.kettle_on_base
         state: "on"
     action:
-      - service: number.set_value
+      - service: climate.set_preset_mode
         target:
-          entity_id: number.kettle_target_temperature
+          entity_id: climate.kettle
         data:
-          value: 212
-      - service: switch.turn_on
-        target:
-          entity_id: switch.kettle_heating
+          preset_mode: coffee
 ```
 
-### Example 2: Kettle Ready Notification
+### Kettle Ready Notification
 
 **Note:** The kettle holds temperature when it reaches setpoint, so heating doesn't turn off. Use temperature threshold instead:
 
@@ -312,135 +319,69 @@ automation:
           message: "Your water is hot! ☕"
 ```
 
-### Example 3: Using Climate Entity
+---
 
-```yaml
-automation:
-  - alias: "Morning Tea"
-    trigger:
-      - platform: time
-        at: "07:00:00"
-    condition:
-      - condition: state
-        entity_id: binary_sensor.kettle_on_base
-        state: "on"
-    action:
-      # Set temperature using climate entity
-      - service: climate.set_temperature
-        target:
-          entity_id: climate.kettle
-        data:
-          temperature: 100  # 100°C = 212°F
-      # Turn on heating
-      - service: climate.set_hvac_mode
-        target:
-          entity_id: climate.kettle
-        data:
-          hvac_mode: heat
-      # Wait 5 minutes then notify
-      - delay: "00:05:00"
-      - service: notify.mobile_app
-        data:
-          message: "Your tea water should be ready! ☕"
-```
+# Protocol Information
 
-## Protocol Information
+This component implements the Cosori kettle BLE protocol. The protocol version (V0/V1) is automatically detected from the kettle's firmware version.
 
-This component implements the Cosori kettle BLE protocol reverse-engineered from packet captures:
+See [PROTOCOL.md](PROTOCOL.md) for complete details.
 
-- **Service UUID**: `0000fff0-0000-1000-8000-00805f9b34fb`
-- **RX Characteristic**: `0000fff1-...` (notifications from kettle)
-- **TX Characteristic**: `0000fff2-...` (commands to kettle)
-- **Protocol Version**: Automatically detected from device firmware (V0/V1)
-- **Sequence**: Read device info → Detect protocol version → Registration handshake → Continuous polling (1s) → Commands
+---
 
-The component automatically reads the kettle's hardware and software version from the BLE Device Information Service to detect the correct protocol version (V0 for older firmware, V1 for newer).
+# Troubleshooting
 
-See the [protocol documentation](PROTOCOL.md) for complete details.
+## Kettle Not Connecting / Not Found
 
-## Troubleshooting
+1. **Check for active connections**: The kettle only supports ONE BLE connection at a time. Disconnect from the official app or any other integration first
+2. **Check MAC address**: Ensure it matches your kettle
+3. **Check distance**: BLE device should be within ~10m of kettle
+4. **Check kettle**: Ensure it's on the base and powered
+5. **Check logs**: Enable debug logging
+6. **Restart**: Power cycle the kettle and/or BLE device
 
-### Kettle Not Connecting
-
-1. **Check MAC address**: Ensure it matches your kettle
-2. **Check distance**: ESP32 should be within ~10m of kettle
-3. **Check kettle**: Ensure it's on the base and powered
-4. **Check logs**: Enable `logger` in ESPHome config
-5. **Restart ESP32**: Sometimes BLE stack needs reset
-
-### Connection Drops
+## Connection Drops (ESPHome)
 
 - **Power supply**: Use stable 5V power supply (not USB from computer)
 - **WiFi interference**: BLE and WiFi share radio on ESP32, reduce WiFi activity
 - **Distance**: Move ESP32 closer to kettle
 
-### Kettle Shows "Unavailable"
+## Kettle Shows "Unavailable"
 
-- Check ESPHome device status in Home Assistant
-- Verify ESP32 is online
-- Check BLE connection switch is ON
-- Restart ESPHome device
+- Check BLE device status in Home Assistant
+- Verify BLE device is online
+- Check BLE connection switch is ON (ESPHome)
+- Restart BLE device
 
-### Commands Not Working
+## Commands Not Working
 
 - Ensure kettle is on base (`binary_sensor.kettle_on_base` should be ON)
 - Check connection status
 - Enable debug logging to see protocol packets
 
-### Disconnects Immediately After "Sending registration handshake"
-
-If your kettle connects but immediately disconnects after the registration handshake (HELLO_MIN), your kettle may require a different handshake sequence. This can happen with different firmware versions.
-
-**Symptoms:**
-```
-[INFO] BLE connection opened
-[INFO] Service search complete
-[INFO] Registered for notifications, sending registration handshake
-[INFO] Sending registration handshake (HELLO_MIN)
-[WARN] BLE disconnected
-```
-
-**Solution:** Capture your kettle's handshake from the official VeSync app and configure it in ESPHome:
-
-1. **Capture the handshake** (Android):
-   - Enable Developer Options → Bluetooth HCI snoop log
-   - Toggle Bluetooth OFF then ON
-   - Connect to kettle using VeSync app
-   - Pull the log: `adb pull /data/misc/bluetooth/logs/btsnoop_hci.log`
-   - Open in Wireshark, filter: `btatt.opcode == 0x52`
-   - Find 3 writes to FFF2 characteristic right after connection
-
-2. **Configure custom handshake** in your ESPHome YAML:
-   ```yaml
-   cosori_kettle_ble:
-     ble_client_id: cosori_kettle_client
-     id: my_kettle
-     name: "Kettle"
-     # Custom handshake for different kettle firmware
-     handshake:
-       - "a5220024008a0081d1003634..."  # Packet 1 (hex, from capture)
-       - "373436613037333131..."        # Packet 2 (hex, from capture)
-       - "6262"                          # Packet 3 (hex, from capture)
-   ```
-
-The handshake packets can be specified with or without colons/spaces (e.g., `"a5:22:00"` or `"a52200"` both work).
-
-### Temperature Doesn't Reach Exact Setpoint
+## Temperature Doesn't Reach Exact Setpoint
 
 The kettle may report temperatures 1-3°F below the setpoint when holding temperature. This is normal behavior:
 
 - The kettle cycles heating to maintain temperature
 - Temperature readings may fluctuate between 209-212°F when set to 212°F
 - Use a threshold automation (e.g., `above: 205`) instead of exact temperature matching
-- The `sensor.kettle_temperature` entity shows the actual kettle reading (always updated)
-- The climate entity temperature may lag slightly due to Fahrenheit→Celsius→Fahrenheit conversion
 
 **For accurate temperature monitoring**, use the dedicated `sensor.kettle_temperature` entity in your automations rather than the climate entity's current temperature.
 
-## Debug Logging
+## Using Official Mobile App
 
-Enable detailed logging in your YAML:
+To use the official Cosori mobile app (which requires exclusive BLE access):
 
+**ESPHome:** Turn off BLE connection switch in Home Assistant, use the mobile app, then turn on BLE connection switch when done
+
+**HA Integration:** Remove the integration temporarily, use the app, then re-add the integration
+
+---
+
+# Debug Logging
+
+**ESPHome:**
 ```yaml
 logger:
   level: DEBUG
@@ -450,7 +391,55 @@ logger:
     esp32_ble_tracker: DEBUG
 ```
 
-## Credits
+**Home Assistant:**
+```yaml
+logger:
+  default: info
+  logs:
+    custom_components.cosori_kettle_ble: debug
+```
+
+---
+
+# Development
+
+## Python Library
+
+A standalone Python library is included at `custom_components/cosori_kettle_ble/cosori_kettle/` for controlling the kettle outside of Home Assistant.
+
+See [LIBRARY.md](LIBRARY.md) for library documentation and [custom_components/cosori_kettle_ble/cosori_kettle/README.md](custom_components/cosori_kettle_ble/cosori_kettle/README.md) for API details.
+
+## Testing
+
+```bash
+# Run library tests
+uv run --extra test pytest tests/library/ -v
+
+# Run HA component tests
+uv run --extra test pytest tests/ha_component/ -v
+
+# Compile ESPHome firmware
+uv run esphome compile cosori-kettle.build.yaml
+
+# Run C++ protocol tests
+make test
+```
+
+## Examples
+
+Interactive examples in `examples/`:
+
+```bash
+# Interactive control
+python examples/interactive.py [MAC_ADDRESS]
+
+# Simple boil example
+python examples/simple.py
+```
+
+---
+
+# Credits
 
 - Inspired by [esphome-jk-bms](https://github.com/syssi/esphome-jk-bms)
 - Protocol reverse-engineered using Wireshark and Python/Bleak

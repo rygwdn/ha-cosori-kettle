@@ -12,6 +12,8 @@ from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from .const import CONF_DEVICE_ID, CONF_REGISTRATION_KEY, DOMAIN
 from .coordinator import CosoriKettleCoordinator
 
+__version__ = "1.0.0"
+
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS: list[Platform] = [

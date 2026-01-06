@@ -2,32 +2,7 @@
 
 A standalone Python library for controlling Cosori Smart Kettles via Bluetooth Low Energy.
 
-## Features
-
-- Full BLE protocol implementation for Cosori kettles
-- Async/await support using `bleak`
-- High-level API for common operations
-- Low-level protocol access for advanced use
-- Type hints and dataclasses for better IDE support
-- Independent of Home Assistant
-
-## Installation
-
-This library is embedded within the Home Assistant component. To use it:
-
-### In This Repository
-
-```python
-from custom_components.cosori_kettle_ble.cosori_kettle import CosoriKettle
-```
-
-### Standalone Usage
-
-Copy the `custom_components/cosori_kettle_ble/cosori_kettle/` directory to your project and install the dependency:
-
-```bash
-pip install bleak>=0.21.0
-```
+**For library overview and architecture, see [LIBRARY.md](../../../LIBRARY.md) in the repository root.**
 
 ## Quick Start
 
@@ -61,41 +36,6 @@ async def main():
         await kettle.stop_heating()
 
 asyncio.run(main())
-```
-
-## Advanced Usage
-
-### Status Monitoring
-
-```python
-from custom_components.cosori_kettle_ble.cosori_kettle import CosoriKettle
-
-def on_status_update(status):
-    print(f"Temp: {status.temp}°F, Heating: {status.stage > 0}")
-
-async with CosoriKettle(device, mac, status_callback=on_status_update) as kettle:
-    # Status updates will call the callback
-    await kettle.update_status()
-```
-
-### Low-Level Protocol Access
-
-```python
-from custom_components.cosori_kettle_ble.cosori_kettle import CosoriKettleBLEClient
-from custom_components.cosori_kettle_ble.cosori_kettle.protocol import (
-    build_status_request_frame,
-    parse_extended_status,
-    PROTOCOL_VERSION_V1
-)
-
-client = CosoriKettleBLEClient(device)
-await client.connect()
-
-# Send custom frame
-frame = build_status_request_frame(PROTOCOL_VERSION_V1, seq=0)
-await client.send_frame(frame)
-
-await client.disconnect()
 ```
 
 ## API Reference
@@ -140,26 +80,45 @@ Status information from the kettle.
 - `baby_formula_enabled: bool` - Baby formula mode status
 - `valid: bool` - Whether status is valid
 
+## Installation
+
+This library is embedded within the Home Assistant component.
+
+### In This Repository
+
+```python
+from custom_components.cosori_kettle_ble.cosori_kettle import CosoriKettle
+```
+
+### Standalone Usage
+
+1. Copy the `custom_components/cosori_kettle_ble/cosori_kettle/` directory to your project
+2. Install dependencies: `pip install bleak>=0.21.0`
+3. Import using the path where you placed it
+
 ## Protocol Details
 
-All temperatures are in Fahrenheit. The library handles:
-- BLE packet framing and checksums
-- Request/response flow with ACK handling
-- Status parsing from compact and extended formats
-- On-base detection
-- Hold/keep-warm timer management
+All temperatures are in Fahrenheit. The library automatically detects protocol version (V0/V1) from firmware version and handles all BLE communication details.
 
 See [PROTOCOL.md](../../../PROTOCOL.md) for complete protocol documentation.
 
-## Development
+## Examples
+
+Interactive examples in repository root `examples/`:
+
+```bash
+# Interactive control
+python examples/interactive.py [MAC_ADDRESS]
+
+# Simple boil example
+python examples/simple.py
+```
+
+## Testing
 
 ```bash
 # Run library tests (from repository root)
 uv run --extra test pytest tests/library/ -v
-
-# Run examples (from repository root)
-python examples/interactive.py [MAC_ADDRESS]
-python examples/simple.py
 ```
 
 ## License

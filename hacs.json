@@ -1,0 +1,7 @@
+{
+  "name": "Cosori Kettle BLE",
+  "render_readme": true,
+  "domains": ["climate", "sensor", "binary_sensor", "switch"],
+  "homeassistant": "2024.1.0",
+  "iot_class": "Local Polling"
+}
