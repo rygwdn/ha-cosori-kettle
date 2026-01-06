@@ -9,11 +9,15 @@ Home Assistant custom component for controlling Cosori smart kettles via BLE. En
 ## Commands
 
 ```bash
-# Run library tests
-uv run --extra test pytest tests/library/ -v
+# Run all tests
+uv run pytest tests/ -v
 
-# Run HA component tests
-uv run --extra test pytest tests/ha_component/ -v
+# Run specific test file
+uv run pytest tests/test_config_flow.py -v
+
+# Run specific test class or method
+uv run pytest tests/test_climate.py::TestCosoriKettleClimateProperties -v
+uv run pytest tests/test_protocol.py::test_build_hello_frame -v
 
 # Scan for kettle MAC address
 ./scan.py
@@ -38,8 +42,10 @@ Python environment: `uv` with Python 3.13 in `.venv/`
 - `coordinator.py` - Data update coordinator
 
 **Tests:**
-- `tests/library/` - Python library tests
-- `tests/ha_component/` - Home Assistant component tests
+- `tests/` - All tests (library and Home Assistant component tests combined)
+  - `test_protocol.py`, `test_client.py`, `test_kettle.py` - Library tests
+  - `test_coordinator.py`, `test_config_flow.py`, `test_climate.py` - HA component tests
+  - `conftest.py` - Shared fixtures and pytest configuration
 
 ### BLE Protocol (see PROTOCOL.md)
 
@@ -63,10 +69,19 @@ Provides Climate entity (thermostat) + individual sensors/switches/numbers. All 
 1. **Temperature:** Already in Fahrenheit - don't convert in protocol layer
 2. **On-base detection:** Use payload[14] from Status ACK (35B), NOT payload[4] or compact status
 3. **Checksums:** V0 ≠ V1 calculation methods
+4. **Async functions in Home Assistant:** `bluetooth.async_discovered_service_info()` is NOT async despite the name - it's decorated with `@hass_callback` and returns synchronously. Don't use `await` on it.
+
+## Testing Patterns
+
+- Use `pytest` with `@pytest.mark.asyncio` for async tests
+- Mock BLE operations using `unittest.mock` (`AsyncMock`, `MagicMock`, `patch`)
+- Create fixtures for common objects (mock coordinators, config entries, BLE devices)
+- Mock `bluetooth.async_discovered_service_info()` as a regular function (not async)
+- Follow existing test patterns in `tests/test_climate.py` and `tests/test_config_flow.py`
 
 ## Key Files
 
 - **Protocol:** `PROTOCOL.md`, `custom_components/cosori_kettle_ble/cosori_kettle/protocol.py`
 - **Client/behavior:** `custom_components/cosori_kettle_ble/cosori_kettle/client.py`, `custom_components/cosori_kettle_ble/cosori_kettle/kettle.py`
 - **HA Integration:** `custom_components/cosori_kettle_ble/__init__.py`, `config_flow.py`, `climate.py`
-- **Tests:** `tests/library/`, `tests/ha_component/`
+- **Tests:** `tests/`
