@@ -73,4 +73,4 @@ CONF_PROTOCOL_VERSION: Final = "protocol_version"
 CONF_REGISTRATION_KEY: Final = "registration_key"
 
 # Update interval
-UPDATE_INTERVAL: Final = 2  # seconds
+UPDATE_INTERVAL: Final = 15  # seconds
