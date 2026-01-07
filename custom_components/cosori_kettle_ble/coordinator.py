@@ -6,10 +6,8 @@ from datetime import timedelta
 import logging
 from typing import Any
 
-from bleak import BleakClient
 from bleak.backends.device import BLEDevice
 from bleak.exc import BleakError
-from bleak_retry_connector import establish_connection
 
 from homeassistant.components import bluetooth
 from homeassistant.core import HomeAssistant, callback
@@ -18,10 +16,6 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 from .const import (
     ACK_HEADER_TYPE,
-    CHAR_HARDWARE_REVISION_UUID,
-    CHAR_MANUFACTURER_UUID,
-    CHAR_MODEL_NUMBER_UUID,
-    CHAR_SOFTWARE_REVISION_UUID,
     DOMAIN,
     PROTOCOL_VERSION_V1,
     UPDATE_INTERVAL,
@@ -32,6 +26,9 @@ from .cosori_kettle.exceptions import (
     ProtocolError,
 )
 from .cosori_kettle.protocol import (
+    CMD_CTRL,
+    CMD_POLL,
+    CompactStatus,
     ExtendedStatus,
     Frame,
     build_hello_frame,
@@ -40,7 +37,7 @@ from .cosori_kettle.protocol import (
     build_set_my_temp_frame,
     build_status_request_frame,
     build_stop_frame,
-    detect_protocol_version,
+    parse_compact_status,
     parse_extended_status,
 )
 
@@ -83,8 +80,6 @@ class CosoriKettleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         # BLE client (will be initialized in async_start)
         self._client: CosoriKettleBLEClient | None = None
-        # TODO: remove..
-        self._bleak_client: BleakClient | None = None
 
     @property
     def hardware_version(self) -> str | None:
@@ -141,28 +136,22 @@ class CosoriKettleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if ble_device is None:
                 raise UpdateFailed("Device not found")
 
-            # Use retry connector for robust connection to establish initial connection
-            self._bleak_client = await establish_connection(
-                BleakClient,
-                ble_device,
-                self._ble_device.address,
-            )
-
-            # Read device information and detect protocol version
-            # TODO: move the read device info logic into the cosori client
-            await self._read_device_info()
-
-            # Disconnect bleak client after reading device info
-            if self._bleak_client and self._bleak_client.is_connected:
-                await self._bleak_client.disconnect()
-            self._bleak_client = None
-
             # Create our BLE client wrapper
             self._client = CosoriKettleBLEClient(
                 ble_device,
                 notification_callback=self._frame_handler,
                 disconnected_callback=self._on_disconnect,
             )
+
+            # Read device info BEFORE connecting (uses temporary client internally)
+            device_info = await self._client.read_device_info()
+            self._hw_version = device_info.hardware_version
+            self._sw_version = device_info.software_version
+            self._model_number = device_info.model_number
+            self._manufacturer = device_info.manufacturer
+            self._protocol_version = device_info.protocol_version
+
+            # Now connect for actual communication
             await self._client.connect()
 
             # Send hello
@@ -185,54 +174,6 @@ class CosoriKettleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             await self._disconnect()
             raise UpdateFailed(f"Failed to connect: {err}") from err
 
-    async def _read_device_info(self) -> None:
-        """Read device information from BLE Device Information Service.
-
-        Reads hardware version, software version, model number, and manufacturer
-        from standard BLE characteristics, then detects the appropriate protocol version.
-        """
-        if not self._bleak_client:
-            return
-
-        # Read device information characteristics (ignore errors if not available)
-        try:
-            hw_data = await self._bleak_client.read_gatt_char(CHAR_HARDWARE_REVISION_UUID)
-            self._hw_version = hw_data.decode("utf-8").strip()
-            _LOGGER.debug("Hardware version: %s", self._hw_version)
-        except Exception as err:
-            _LOGGER.debug("Could not read hardware version: %s", err)
-
-        try:
-            sw_data = await self._bleak_client.read_gatt_char(CHAR_SOFTWARE_REVISION_UUID)
-            self._sw_version = sw_data.decode("utf-8").strip()
-            _LOGGER.debug("Software version: %s", self._sw_version)
-        except Exception as err:
-            _LOGGER.debug("Could not read software version: %s", err)
-
-        try:
-            model_data = await self._bleak_client.read_gatt_char(CHAR_MODEL_NUMBER_UUID)
-            self._model_number = model_data.decode("utf-8").strip()
-            _LOGGER.debug("Model number: %s", self._model_number)
-        except Exception as err:
-            _LOGGER.debug("Could not read model number: %s", err)
-
-        try:
-            mfr_data = await self._bleak_client.read_gatt_char(CHAR_MANUFACTURER_UUID)
-            self._manufacturer = mfr_data.decode("utf-8").strip()
-            _LOGGER.debug("Manufacturer: %s", self._manufacturer)
-        except Exception as err:
-            _LOGGER.debug("Could not read manufacturer: %s", err)
-
-        # Detect protocol version based on HW/SW versions
-        detected_version = detect_protocol_version(self._hw_version, self._sw_version)
-        self._protocol_version = detected_version
-        _LOGGER.info(
-            "Detected protocol version V%d (HW: %s, SW: %s)",
-            detected_version,
-            self._hw_version or "unknown",
-            self._sw_version or "unknown",
-        )
-
     def _on_disconnect(self) -> None:
         """Handle disconnection."""
         _LOGGER.warning("Disconnected from %s", self._ble_device.address)
@@ -245,16 +186,13 @@ class CosoriKettleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             except BleakError as err:
                 _LOGGER.debug("Error during disconnect: %s", err)
             self._client = None
-        if self._bleak_client and self._bleak_client.is_connected:
-            try:
-                await self._bleak_client.disconnect()
-            except BleakError as err:
-                _LOGGER.debug("Error during disconnect: %s", err)
-            self._bleak_client = None
 
     @callback
     def _frame_handler(self, frame: Frame) -> None:
         """Handle received frames from BLE client.
+
+        Extended status: ACK response to poll requests (CMD_POLL)
+        Compact status: Unsolicited periodic updates from kettle (CMD_CTRL)
 
         Args:
             frame: Received frame from device
@@ -266,14 +204,24 @@ class CosoriKettleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             frame.payload.hex(),
         )
 
-        status = parse_extended_status(frame.payload)
-        # TODO: check command ID and parse both extended and compact status!
-        if status.valid:
-            self._update_data_from_status(status)
+        if len(frame.payload) < 2:
+            return
+
+        cmd_id = frame.payload[1]
+
+        if cmd_id == CMD_POLL:
+            # Extended status - ACK to our poll request
+            status = parse_extended_status(frame.payload)
+            if status.valid:
+                self._update_data_from_status(status)
+        elif cmd_id == CMD_CTRL:
+            # Compact status - unsolicited periodic update from kettle
+            status = parse_compact_status(frame.payload)
+            if status.valid:
+                self._update_data_from_compact_status(status)
 
     def _update_data_from_status(self, status: ExtendedStatus) -> None:
-        """Update coordinator data from status."""
-        # TODO: handle compact status too..
+        """Update coordinator data from extended status."""
         self.async_set_updated_data({
             "stage": status.stage,
             "mode": status.mode,
@@ -286,6 +234,34 @@ class CosoriKettleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "baby_formula_enabled": status.baby_formula_enabled,
             "heating": status.stage > 0,
         })
+
+    def _update_data_from_compact_status(self, status: CompactStatus) -> None:
+        """Update coordinator data from compact status.
+
+        Compact status is sent periodically by the kettle as unsolicited updates.
+        It only contains: stage, mode, setpoint, temp
+        Preserve extended-only fields from previous data.
+        """
+        # Start with existing data to preserve extended fields
+        data = self.data.copy() if self.data else {}
+
+        # Update common fields from compact status
+        data.update({
+            "stage": status.stage,
+            "mode": status.mode,
+            "setpoint": status.setpoint,
+            "temperature": status.temp,
+            "heating": status.stage > 0,
+        })
+
+        # Initialize extended fields with defaults if not present
+        data.setdefault("my_temp", 0)
+        data.setdefault("configured_hold_time", 0)
+        data.setdefault("remaining_hold_time", 0)
+        data.setdefault("on_base", False)
+        data.setdefault("baby_formula_enabled", False)
+
+        self.async_set_updated_data(data)
 
     async def _send_hello(self) -> None:
         """Send hello packet.

@@ -5,6 +5,7 @@ This module provides the low-level BLE communication layer using bleak.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 import logging
 from typing import Callable
 
@@ -23,6 +24,23 @@ from .protocol import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+# Device Information Service UUIDs
+CHAR_HARDWARE_REVISION_UUID = "00002a27-0000-1000-8000-00805f9b34fb"
+CHAR_SOFTWARE_REVISION_UUID = "00002a28-0000-1000-8000-00805f9b34fb"
+CHAR_MODEL_NUMBER_UUID = "00002a24-0000-1000-8000-00805f9b34fb"
+CHAR_MANUFACTURER_UUID = "00002a29-0000-1000-8000-00805f9b34fb"
+
+
+@dataclass
+class DeviceInfo:
+    """Device information from BLE Device Information Service."""
+
+    hardware_version: str | None
+    software_version: str | None
+    model_number: str | None
+    manufacturer: str | None
+    protocol_version: int
 
 # BLE Service and Characteristics
 SERVICE_UUID = "0000fff0-0000-1000-8000-00805f9b34fb"
@@ -111,6 +129,90 @@ class CosoriKettleBLEClient:
         self._client = None
         self._connected = False
 
+    async def read_device_info(self) -> DeviceInfo:
+        """Read device information from BLE Device Information Service.
+
+        Can be called before or after connecting. If not connected, creates
+        a temporary BleakClient to read the info.
+
+        Returns:
+            DeviceInfo with hardware version, software version, model number,
+            manufacturer, and detected protocol version.
+        """
+        if self.is_connected:
+            # Use existing connection
+            client = self._client
+            should_disconnect = False
+        else:
+            # Create temporary BleakClient
+            from bleak_retry_connector import establish_connection
+
+            _LOGGER.debug("Creating temporary connection to read device info")
+            client = await establish_connection(
+                BleakClient,
+                self._ble_device,
+                self._ble_device.address,
+            )
+            should_disconnect = True
+
+        try:
+            # Read device info characteristics (ignore errors if not available)
+            hw_version = None
+            sw_version = None
+            model_number = None
+            manufacturer = None
+
+            try:
+                hw_data = await client.read_gatt_char(CHAR_HARDWARE_REVISION_UUID)
+                hw_version = hw_data.decode("utf-8").strip()
+                _LOGGER.debug("Hardware version: %s", hw_version)
+            except Exception as err:
+                _LOGGER.debug("Could not read hardware version: %s", err)
+
+            try:
+                sw_data = await client.read_gatt_char(CHAR_SOFTWARE_REVISION_UUID)
+                sw_version = sw_data.decode("utf-8").strip()
+                _LOGGER.debug("Software version: %s", sw_version)
+            except Exception as err:
+                _LOGGER.debug("Could not read software version: %s", err)
+
+            try:
+                model_data = await client.read_gatt_char(CHAR_MODEL_NUMBER_UUID)
+                model_number = model_data.decode("utf-8").strip()
+                _LOGGER.debug("Model number: %s", model_number)
+            except Exception as err:
+                _LOGGER.debug("Could not read model number: %s", err)
+
+            try:
+                mfr_data = await client.read_gatt_char(CHAR_MANUFACTURER_UUID)
+                manufacturer = mfr_data.decode("utf-8").strip()
+                _LOGGER.debug("Manufacturer: %s", manufacturer)
+            except Exception as err:
+                _LOGGER.debug("Could not read manufacturer: %s", err)
+
+            # Detect protocol version based on HW/SW versions
+            from .protocol import detect_protocol_version
+
+            protocol_version = detect_protocol_version(hw_version, sw_version)
+            _LOGGER.info(
+                "Detected protocol version V%d (HW: %s, SW: %s)",
+                protocol_version,
+                hw_version or "unknown",
+                sw_version or "unknown",
+            )
+
+            return DeviceInfo(
+                hardware_version=hw_version,
+                software_version=sw_version,
+                model_number=model_number,
+                manufacturer=manufacturer,
+                protocol_version=protocol_version,
+            )
+        finally:
+            if should_disconnect and client.is_connected:
+                await client.disconnect()
+                _LOGGER.debug("Disconnected temporary connection")
+
     def _notification_handler(self, sender: int, data: bytearray) -> None:
         """Handle BLE notifications."""
         _LOGGER.debug("Received notification: %s", data.hex())
@@ -191,7 +293,16 @@ class CosoriKettleBLEClient:
             return ack_payload
 
         except asyncio.TimeoutError:
-            _LOGGER.error("Timeout waiting for ACK (seq=%02x)", frame.seq)
+            cmd_hex = "??"
+            if len(frame.payload) >= 2:
+                cmd_hex = f"{frame.payload[1]:02x}"
+
+            _LOGGER.error(
+                "Timeout waiting for ACK (seq=%02x, cmd=0x%s, payload=%s)",
+                frame.seq,
+                cmd_hex,
+                frame.payload.hex() if len(frame.payload) > 0 else "empty",
+            )
             raise
 
     async def send_frame(self, frame: Frame, wait_for_ack: bool = True) -> bytes | None:

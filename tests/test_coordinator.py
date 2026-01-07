@@ -116,7 +116,6 @@ class TestCoordinatorInitialization:
         assert coordinator._protocol_version == PROTOCOL_VERSION_V1
         assert coordinator._registration_key == registration_key
         assert coordinator._client is None
-        assert coordinator._bleak_client is None
         assert coordinator._tx_seq == 0
 
     def test_init_sets_coordinator_name(self, coordinator, mock_ble_device):
@@ -165,19 +164,29 @@ class TestCoordinatorConnection:
     @pytest.mark.asyncio
     async def test_connect_establishes_connection(self, coordinator, mock_ble_device, mock_bleak_client, mock_cosori_client):
         """Test successful connection."""
+        from custom_components.cosori_kettle_ble.cosori_kettle.client import DeviceInfo
+
+        device_info = DeviceInfo(
+            hardware_version="1.0.00",
+            software_version="R0007V0012",
+            model_number="Test Model",
+            manufacturer="Cosori",
+            protocol_version=1,
+        )
+
         with patch("custom_components.cosori_kettle_ble.coordinator.bluetooth") as mock_bt, \
-             patch("custom_components.cosori_kettle_ble.coordinator.establish_connection", new_callable=AsyncMock) as mock_establish, \
              patch("custom_components.cosori_kettle_ble.coordinator.CosoriKettleBLEClient") as mock_client_class, \
              patch.object(coordinator, "_send_hello", new_callable=AsyncMock):
 
             # Setup mocks
             mock_bt.async_ble_device_from_address.return_value = mock_ble_device
-            mock_establish.return_value = mock_bleak_client
             mock_client_class.return_value = mock_cosori_client
+            mock_cosori_client.read_device_info.return_value = device_info
 
             await coordinator._connect()
 
             assert coordinator._client == mock_cosori_client
+            mock_cosori_client.read_device_info.assert_called_once()
             mock_cosori_client.connect.assert_called_once()
 
     @pytest.mark.asyncio
@@ -201,17 +210,18 @@ class TestCoordinatorConnection:
                 await coordinator._connect()
 
     @pytest.mark.asyncio
-    async def test_connect_bleak_error(self, coordinator, mock_ble_device):
+    async def test_connect_bleak_error(self, coordinator, mock_ble_device, mock_cosori_client):
         """Test connection with BleakError."""
         from bleak.exc import BleakError
         from homeassistant.helpers.update_coordinator import UpdateFailed
 
         with patch("custom_components.cosori_kettle_ble.coordinator.bluetooth") as mock_bt, \
-             patch("custom_components.cosori_kettle_ble.coordinator.establish_connection", new_callable=AsyncMock) as mock_establish, \
+             patch("custom_components.cosori_kettle_ble.coordinator.CosoriKettleBLEClient") as mock_client_class, \
              patch.object(coordinator, "_disconnect", new_callable=AsyncMock):
 
             mock_bt.async_ble_device_from_address.return_value = mock_ble_device
-            mock_establish.side_effect = BleakError("Connection refused")
+            mock_client_class.return_value = mock_cosori_client
+            mock_cosori_client.read_device_info.side_effect = BleakError("Connection refused")
 
             with pytest.raises(UpdateFailed, match="Failed to connect"):
                 await coordinator._connect()
@@ -269,16 +279,24 @@ class TestCoordinatorAsyncUpdateData:
     @pytest.mark.asyncio
     async def test_async_update_data_connects_if_disconnected(self, coordinator, mock_ble_device, mock_bleak_client, mock_cosori_client):
         """Test that async_update_data reconnects if disconnected."""
+        from custom_components.cosori_kettle_ble.cosori_kettle.client import DeviceInfo
+
         coordinator._client = None
+        device_info = DeviceInfo(
+            hardware_version="1.0.00",
+            software_version="R0007V0012",
+            model_number="Test Model",
+            manufacturer="Cosori",
+            protocol_version=1,
+        )
 
         with patch("custom_components.cosori_kettle_ble.coordinator.bluetooth") as mock_bt, \
-             patch("custom_components.cosori_kettle_ble.coordinator.establish_connection", new_callable=AsyncMock) as mock_establish, \
              patch("custom_components.cosori_kettle_ble.coordinator.CosoriKettleBLEClient") as mock_client_class, \
              patch.object(coordinator, "_send_frame", new_callable=AsyncMock):
 
             mock_bt.async_ble_device_from_address.return_value = mock_ble_device
-            mock_establish.return_value = mock_bleak_client
             mock_client_class.return_value = mock_cosori_client
+            mock_cosori_client.read_device_info.return_value = device_info
             coordinator.data = {}
 
             result = await coordinator._async_update_data()
@@ -685,13 +703,22 @@ class TestCoordinatorIntegration:
     @pytest.mark.asyncio
     async def test_full_connection_flow(self, coordinator, mock_ble_device, mock_bleak_client, mock_cosori_client, sample_status_payload):
         """Test full connection and update flow."""
+        from custom_components.cosori_kettle_ble.cosori_kettle.client import DeviceInfo
+
+        device_info = DeviceInfo(
+            hardware_version="1.0.00",
+            software_version="R0007V0012",
+            model_number="Test Model",
+            manufacturer="Cosori",
+            protocol_version=1,
+        )
+
         with patch("custom_components.cosori_kettle_ble.coordinator.bluetooth") as mock_bt, \
-             patch("custom_components.cosori_kettle_ble.coordinator.establish_connection", new_callable=AsyncMock) as mock_establish, \
              patch("custom_components.cosori_kettle_ble.coordinator.CosoriKettleBLEClient") as mock_client_class:
 
             mock_bt.async_ble_device_from_address.return_value = mock_ble_device
-            mock_establish.return_value = mock_bleak_client
             mock_client_class.return_value = mock_cosori_client
+            mock_cosori_client.read_device_info.return_value = device_info
 
             # Connect
             await coordinator._connect()
@@ -707,13 +734,22 @@ class TestCoordinatorIntegration:
     @pytest.mark.asyncio
     async def test_reconnection_on_update(self, coordinator, mock_ble_device, mock_bleak_client, mock_cosori_client):
         """Test that update reconnects when disconnected."""
+        from custom_components.cosori_kettle_ble.cosori_kettle.client import DeviceInfo
+
+        device_info = DeviceInfo(
+            hardware_version="1.0.00",
+            software_version="R0007V0012",
+            model_number="Test Model",
+            manufacturer="Cosori",
+            protocol_version=1,
+        )
+
         with patch("custom_components.cosori_kettle_ble.coordinator.bluetooth") as mock_bt, \
-             patch("custom_components.cosori_kettle_ble.coordinator.establish_connection", new_callable=AsyncMock) as mock_establish, \
              patch("custom_components.cosori_kettle_ble.coordinator.CosoriKettleBLEClient") as mock_client_class:
 
             mock_bt.async_ble_device_from_address.return_value = mock_ble_device
-            mock_establish.return_value = mock_bleak_client
             mock_client_class.return_value = mock_cosori_client
+            mock_cosori_client.read_device_info.return_value = device_info
 
             # Start disconnected
             coordinator._client = None
