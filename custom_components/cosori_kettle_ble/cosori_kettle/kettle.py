@@ -150,10 +150,6 @@ class CosoriKettle:
 
     def _on_notification(self, frame: Frame) -> None:
         """Handle notification from BLE client."""
-        # Skip ACK frames as they're handled by the client
-        if frame.frame_type == ACK_HEADER_TYPE:
-            return
-
         # Parse status
         status = parse_extended_status(frame.payload)
         if status.valid:

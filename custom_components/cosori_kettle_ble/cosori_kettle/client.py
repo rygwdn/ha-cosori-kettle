@@ -15,6 +15,7 @@ from bleak.exc import BleakError
 from .exceptions import ProtocolError
 from .protocol import (
     ACK_HEADER_TYPE,
+    COMMANDS_WITH_STATUS,
     Frame,
     build_packet,
     parse_frames,
@@ -178,7 +179,7 @@ class CosoriKettleBLEClient:
                     )
 
             # Extract error code/status from payload[4] if available
-            if len(ack_payload) > 4:
+            if len(ack_payload) > 4 and frame.payload[1] in COMMANDS_WITH_STATUS:
                 status_code = ack_payload[4]
                 if status_code != 0:
                     _LOGGER.warning("Device returned error status: %02x", status_code)
