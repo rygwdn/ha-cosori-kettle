@@ -253,7 +253,7 @@ class CosoriKettleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         for info in discovered:
             if info.address in current_addresses:
                 continue
-            if SERVICE_UUID.lower() in [str(uuid).lower() for uuid in info.service_uuids]:
+            if info.name == "Cosori Gooseneck Kettle" or SERVICE_UUID.lower() in [str(uuid).lower() for uuid in info.service_uuids]:
                 self._discovered_devices[info.address] = info
 
         if not self._discovered_devices:
