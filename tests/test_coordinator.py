@@ -309,26 +309,34 @@ class TestCoordinatorAsyncUpdateData:
 
     @pytest.mark.asyncio
     async def test_async_update_data_handles_bleak_error(self, coordinator, mock_cosori_client):
-        """Test async_update_data handles BleakError."""
+        """Test async_update_data handles BleakError by marking device unavailable.
+
+        Bluetooth errors indicate the device is disconnected and should mark
+        the device as unavailable by raising UpdateFailed.
+        """
         from bleak.exc import BleakError
         from homeassistant.helpers.update_coordinator import UpdateFailed
 
         coordinator._client = mock_cosori_client
-        mock_cosori_client.send_status_request.side_effect = BleakError("Error")
+        mock_cosori_client.send_status_request.side_effect = BleakError("Connection lost")
 
-        with pytest.raises(UpdateFailed, match="Failed to update"):
+        with pytest.raises(UpdateFailed, match="Bluetooth error"):
             await coordinator._async_update_data()
 
     @pytest.mark.asyncio
     async def test_async_update_data_handles_timeout(self, coordinator, mock_cosori_client):
-        """Test async_update_data handles timeout."""
-        from homeassistant.helpers.update_coordinator import UpdateFailed
+        """Test async_update_data handles ACK timeout gracefully.
 
+        ACK timeouts should log a warning but not mark the device as unavailable.
+        The device remains available and returns existing data.
+        """
         coordinator._client = mock_cosori_client
-        mock_cosori_client.send_status_request.side_effect = asyncio.TimeoutError()
+        coordinator.data = {"temperature": 72, "stage": 0}
+        mock_cosori_client.send_status_request.side_effect = asyncio.TimeoutError("ACK timeout")
 
-        with pytest.raises(UpdateFailed, match="Failed to update"):
-            await coordinator._async_update_data()
+        # Should not raise UpdateFailed, just return existing data
+        result = await coordinator._async_update_data()
+        assert result == {"temperature": 72, "stage": 0}
 
     @pytest.mark.asyncio
     async def test_async_update_data_lock_prevents_concurrent_access(self, coordinator, mock_cosori_client):

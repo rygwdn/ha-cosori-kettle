@@ -173,8 +173,13 @@ class CosoriKettleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             raise UpdateFailed(f"Failed to connect: {err}") from err
 
     def _on_disconnect(self) -> None:
-        """Handle disconnection."""
+        """Handle disconnection.
+
+        This callback is called when the BLE connection is lost.
+        Updates will attempt to reconnect automatically.
+        """
         _LOGGER.warning("Disconnected from %s", self._ble_device.address)
+        # The next update cycle will attempt to reconnect
 
     async def _disconnect(self) -> None:
         """Disconnect from the device."""
@@ -310,9 +315,16 @@ class CosoriKettleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 # Return current data (updated via notification handler)
                 return self.data or {}
 
-            except (BleakError, asyncio.TimeoutError) as err:
-                _LOGGER.error("Failed to update: %s", err)
-                raise UpdateFailed(f"Failed to update: {err}") from err
+            except asyncio.TimeoutError as err:
+                # ACK timeout - log warning but don't mark device unavailable
+                # Device is still connected and may respond to next poll
+                _LOGGER.warning("ACK timeout during status request: %s", err)
+                # Return existing data - device is still available
+                return self.data or {}
+            except BleakError as err:
+                # Bluetooth error - device is likely disconnected
+                _LOGGER.error("Bluetooth error during update: %s", err)
+                raise UpdateFailed(f"Bluetooth error: {err}") from err
 
     async def async_set_mode(self, mode: int, temp_f: int, hold_time: int) -> None:
         """Set heating mode."""
