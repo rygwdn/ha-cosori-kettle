@@ -16,7 +16,9 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 from .const import (
     ACK_HEADER_TYPE,
+    ACK_TIMEOUT_RETRY_DELAY,
     DOMAIN,
+    MAX_RECONNECT_ATTEMPTS,
     PROTOCOL_VERSION_V1,
     UPDATE_INTERVAL,
 )
@@ -316,15 +318,56 @@ class CosoriKettleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 return self.data or {}
 
             except asyncio.TimeoutError as err:
-                # ACK timeout - log warning but don't mark device unavailable
-                # Device is still connected and may respond to next poll
-                _LOGGER.warning("ACK timeout during status request: %s", err)
-                # Return existing data - device is still available
-                return self.data or {}
+                # ACK timeout - retry once after delay
+                _LOGGER.warning(
+                    "ACK timeout during status request, retrying in %ds: %s",
+                    ACK_TIMEOUT_RETRY_DELAY,
+                    err
+                )
+
+                # Wait before retry
+                await asyncio.sleep(ACK_TIMEOUT_RETRY_DELAY)
+
+                try:
+                    # Retry the status request
+                    await self._client.send_status_request(wait_for_ack=True)
+                    _LOGGER.info("Retry successful after ACK timeout")
+                    return self.data or {}
+                except asyncio.TimeoutError:
+                    # Second timeout - log but still keep device available
+                    _LOGGER.warning("ACK timeout on retry, will try again on next update")
+                    return self.data or {}
+                except BleakError as retry_err:
+                    # Connection lost during retry
+                    _LOGGER.error("Bluetooth error during retry: %s", retry_err)
+                    raise UpdateFailed(f"Bluetooth error: {retry_err}") from retry_err
+
             except BleakError as err:
-                # Bluetooth error - device is likely disconnected
+                # Bluetooth error - attempt reconnection
                 _LOGGER.error("Bluetooth error during update: %s", err)
-                raise UpdateFailed(f"Bluetooth error: {err}") from err
+
+                # Try to reconnect
+                for attempt in range(1, MAX_RECONNECT_ATTEMPTS + 1):
+                    _LOGGER.info("Reconnection attempt %d/%d", attempt, MAX_RECONNECT_ATTEMPTS)
+                    try:
+                        await self._disconnect()
+                        await asyncio.sleep(1)  # Brief delay before reconnect
+                        await self._connect()
+                        _LOGGER.info("Successfully reconnected on attempt %d", attempt)
+                        # Try to get status after reconnecting
+                        await self._client.send_status_request(wait_for_ack=True)
+                        return self.data or {}
+                    except (BleakError, asyncio.TimeoutError) as reconnect_err:
+                        _LOGGER.warning(
+                            "Reconnection attempt %d failed: %s",
+                            attempt,
+                            reconnect_err
+                        )
+                        if attempt == MAX_RECONNECT_ATTEMPTS:
+                            # All attempts failed
+                            raise UpdateFailed(
+                                f"Failed to reconnect after {MAX_RECONNECT_ATTEMPTS} attempts"
+                            ) from err
 
     async def async_set_mode(self, mode: int, temp_f: int, hold_time: int) -> None:
         """Set heating mode."""

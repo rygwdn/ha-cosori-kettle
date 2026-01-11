@@ -72,5 +72,7 @@ CONF_DEVICE_ID: Final = "device_id"
 CONF_PROTOCOL_VERSION: Final = "protocol_version"
 CONF_REGISTRATION_KEY: Final = "registration_key"
 
-# Update interval
+# Update interval and retry settings
 UPDATE_INTERVAL: Final = 15  # seconds
+ACK_TIMEOUT_RETRY_DELAY: Final = 5  # seconds before retrying after ACK timeout
+MAX_RECONNECT_ATTEMPTS: Final = 3  # max attempts to reconnect on disconnect

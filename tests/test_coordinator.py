@@ -309,10 +309,10 @@ class TestCoordinatorAsyncUpdateData:
 
     @pytest.mark.asyncio
     async def test_async_update_data_handles_bleak_error(self, coordinator, mock_cosori_client):
-        """Test async_update_data handles BleakError by marking device unavailable.
+        """Test async_update_data handles BleakError by attempting reconnection.
 
-        Bluetooth errors indicate the device is disconnected and should mark
-        the device as unavailable by raising UpdateFailed.
+        Bluetooth errors should trigger reconnection attempts. If all attempts
+        fail, the device becomes unavailable by raising UpdateFailed.
         """
         from bleak.exc import BleakError
         from homeassistant.helpers.update_coordinator import UpdateFailed
@@ -320,23 +320,39 @@ class TestCoordinatorAsyncUpdateData:
         coordinator._client = mock_cosori_client
         mock_cosori_client.send_status_request.side_effect = BleakError("Connection lost")
 
-        with pytest.raises(UpdateFailed, match="Bluetooth error"):
-            await coordinator._async_update_data()
+        # Mock reconnection methods to fail
+        with patch.object(coordinator, '_disconnect', new_callable=AsyncMock) as mock_disconnect, \
+             patch.object(coordinator, '_connect', new_callable=AsyncMock, side_effect=BleakError("Cannot reconnect")) as mock_connect, \
+             patch('asyncio.sleep', new_callable=AsyncMock):
+
+            with pytest.raises(UpdateFailed, match="Failed to reconnect"):
+                await coordinator._async_update_data()
+
+            # Should have tried to reconnect 3 times
+            assert mock_disconnect.call_count == 3
+            assert mock_connect.call_count == 3
 
     @pytest.mark.asyncio
     async def test_async_update_data_handles_timeout(self, coordinator, mock_cosori_client):
-        """Test async_update_data handles ACK timeout gracefully.
+        """Test async_update_data handles ACK timeout with retry logic.
 
-        ACK timeouts should log a warning but not mark the device as unavailable.
-        The device remains available and returns existing data.
+        First timeout triggers retry after 5s delay. If retry also times out,
+        device remains available and returns existing data.
         """
         coordinator._client = mock_cosori_client
         coordinator.data = {"temperature": 72, "stage": 0}
         mock_cosori_client.send_status_request.side_effect = asyncio.TimeoutError("ACK timeout")
 
-        # Should not raise UpdateFailed, just return existing data
-        result = await coordinator._async_update_data()
-        assert result == {"temperature": 72, "stage": 0}
+        # Mock sleep to avoid actual delay
+        with patch('asyncio.sleep', new_callable=AsyncMock) as mock_sleep:
+            # Should not raise UpdateFailed, just return existing data after retry
+            result = await coordinator._async_update_data()
+            assert result == {"temperature": 72, "stage": 0}
+
+            # Should have called sleep for 5s delay before retry
+            mock_sleep.assert_any_call(5)
+            # Should have tried twice (initial + retry)
+            assert mock_cosori_client.send_status_request.call_count == 2
 
     @pytest.mark.asyncio
     async def test_async_update_data_lock_prevents_concurrent_access(self, coordinator, mock_cosori_client):
@@ -361,6 +377,68 @@ class TestCoordinatorAsyncUpdateData:
 
         # Both should complete but the second should wait for the first
         assert call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_async_update_data_timeout_retry_succeeds(self, coordinator, mock_cosori_client):
+        """Test ACK timeout retry succeeds on second attempt."""
+        coordinator._client = mock_cosori_client
+        coordinator.data = {"temperature": 72, "stage": 0}
+
+        # First call times out, second succeeds
+        timeout_count = [0]
+
+        async def send_with_timeout(wait_for_ack=True):
+            timeout_count[0] += 1
+            if timeout_count[0] == 1:
+                raise asyncio.TimeoutError("ACK timeout")
+            # Second attempt succeeds (no exception)
+
+        mock_cosori_client.send_status_request.side_effect = send_with_timeout
+
+        # Mock sleep to avoid actual delay
+        with patch('asyncio.sleep', new_callable=AsyncMock) as mock_sleep:
+            # Should succeed on retry
+            result = await coordinator._async_update_data()
+            assert result == {"temperature": 72, "stage": 0}
+
+            # Should have called sleep for retry delay
+            mock_sleep.assert_any_call(5)
+            # Should have tried twice (initial + successful retry)
+            assert mock_cosori_client.send_status_request.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_async_update_data_reconnect_succeeds(self, coordinator, mock_cosori_client):
+        """Test successful reconnection after BleakError."""
+        from bleak.exc import BleakError
+
+        coordinator._client = mock_cosori_client
+        coordinator.data = {"temperature": 72, "stage": 0}
+
+        # First call fails with BleakError
+        call_count = [0]
+
+        async def send_with_error(wait_for_ack=True):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                raise BleakError("Connection lost")
+            # After reconnect, succeeds
+
+        mock_cosori_client.send_status_request.side_effect = send_with_error
+
+        # Mock reconnection methods to succeed
+        with patch.object(coordinator, '_disconnect', new_callable=AsyncMock) as mock_disconnect, \
+             patch.object(coordinator, '_connect', new_callable=AsyncMock) as mock_connect, \
+             patch('asyncio.sleep', new_callable=AsyncMock) as mock_sleep:
+
+            # Should succeed after reconnection
+            result = await coordinator._async_update_data()
+            assert result == {"temperature": 72, "stage": 0}
+
+            # Should have disconnected and reconnected once
+            assert mock_disconnect.call_count == 1
+            assert mock_connect.call_count == 1
+            # Should have tried sending twice (initial + after reconnect)
+            assert mock_cosori_client.send_status_request.call_count == 2
 
 
 class TestCoordinatorSendFrame:
