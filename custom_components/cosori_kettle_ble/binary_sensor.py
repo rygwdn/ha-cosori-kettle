@@ -32,14 +32,7 @@ BINARY_SENSORS: tuple[CosoriKettleBinarySensorEntityDescription, ...] = (
     CosoriKettleBinarySensorEntityDescription(
         key="on_base",
         name="On Base",
-        device_class=BinarySensorDeviceClass.CONNECTIVITY,
         value_fn=lambda data: data.get("on_base", False),
-    ),
-    CosoriKettleBinarySensorEntityDescription(
-        key="heating",
-        name="Heating",
-        device_class=BinarySensorDeviceClass.HEAT,
-        value_fn=lambda data: data.get("heating", False),
     ),
 )
 

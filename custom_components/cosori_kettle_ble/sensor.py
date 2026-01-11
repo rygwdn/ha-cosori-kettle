@@ -28,6 +28,31 @@ class CosoriKettleSensorEntityDescription(SensorEntityDescription):
     """Describes Cosori Kettle sensor entity."""
 
     value_fn: Callable[[dict], any] | None = None
+    display_precision: int | None = None
+
+
+def _get_heating_status(data: dict) -> str:
+    """Get heating status based on stage.
+
+    Stage values:
+    - 0x00: Off
+    - 0x01: Heating (actively heating to target temperature)
+    - 0x02: Warming (maintaining temperature after reaching target)
+    - 0x03: Holding (maintaining temperature with hold timer active)
+    """
+    stage = data.get("stage", 0)
+
+    if stage == 0x00:
+        return "Off"
+    elif stage == 0x01:
+        return "Heating"
+    elif stage == 0x02:
+        return "Warming"
+    elif stage == 0x03:
+        return "Holding"
+    else:
+        # Fallback for unknown stages
+        return "Off"
 
 
 SENSORS: tuple[CosoriKettleSensorEntityDescription, ...] = (
@@ -38,6 +63,7 @@ SENSORS: tuple[CosoriKettleSensorEntityDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfTemperature.FAHRENHEIT,
         value_fn=lambda data: data.get("temperature"),
+        suggested_display_precision=0,
     ),
     CosoriKettleSensorEntityDescription(
         key="setpoint",
@@ -46,6 +72,7 @@ SENSORS: tuple[CosoriKettleSensorEntityDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfTemperature.FAHRENHEIT,
         value_fn=lambda data: data.get("setpoint"),
+        suggested_display_precision=0,
     ),
     CosoriKettleSensorEntityDescription(
         key="my_temp",
@@ -54,11 +81,12 @@ SENSORS: tuple[CosoriKettleSensorEntityDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfTemperature.FAHRENHEIT,
         value_fn=lambda data: data.get("my_temp"),
+        suggested_display_precision=0,
     ),
     CosoriKettleSensorEntityDescription(
-        key="mode",
-        name="Mode",
-        value_fn=lambda data: MODE_NAMES.get(data.get("mode"), "Unknown"),
+        key="heating_status",
+        name="Heating Status",
+        value_fn=_get_heating_status,
     ),
     CosoriKettleSensorEntityDescription(
         key="remaining_hold_time",

@@ -32,20 +32,31 @@ from .coordinator import CosoriKettleCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
-# Preset modes
-PRESET_BOIL = "boil"
-PRESET_GREEN_TEA = "green_tea"
-PRESET_OOLONG = "oolong"
-PRESET_COFFEE = "coffee"
+# Custom HVAC modes for different heating modes
+# We'll use custom modes since Home Assistant doesn't have built-in modes for these
+HVAC_MODE_BOIL = "boil"
+HVAC_MODE_GREEN_TEA = "green_tea"
+HVAC_MODE_OOLONG = "oolong"
+HVAC_MODE_COFFEE = "coffee"
+HVAC_MODE_MY_TEMP = "my_temp"
 
-PRESET_TO_MODE = {
-    PRESET_BOIL: MODE_BOIL,
-    PRESET_GREEN_TEA: MODE_GREEN_TEA,
-    PRESET_OOLONG: MODE_OOLONG,
-    PRESET_COFFEE: MODE_COFFEE,
+HVAC_MODE_TO_KETTLE_MODE = {
+    HVAC_MODE_BOIL: MODE_BOIL,
+    HVAC_MODE_GREEN_TEA: MODE_GREEN_TEA,
+    HVAC_MODE_OOLONG: MODE_OOLONG,
+    HVAC_MODE_COFFEE: MODE_COFFEE,
+    HVAC_MODE_MY_TEMP: MODE_MY_TEMP,
 }
 
-MODE_TO_PRESET = {v: k for k, v in PRESET_TO_MODE.items()}
+KETTLE_MODE_TO_HVAC_MODE = {v: k for k, v in HVAC_MODE_TO_KETTLE_MODE.items()}
+
+# Temperature for each mode (in Fahrenheit)
+MODE_TEMPS = {
+    MODE_BOIL: 212,
+    MODE_GREEN_TEA: 180,
+    MODE_OOLONG: 195,
+    MODE_COFFEE: 205,
+}
 
 
 async def async_setup_entry(
@@ -64,17 +75,24 @@ class CosoriKettleClimate(CoordinatorEntity[CosoriKettleCoordinator], ClimateEnt
     _attr_has_entity_name = True
     _attr_name = None
     _attr_temperature_unit = UnitOfTemperature.FAHRENHEIT
-    _attr_hvac_modes = [HVACMode.OFF, HVACMode.HEAT]
-    _attr_preset_modes = [PRESET_BOIL, PRESET_GREEN_TEA, PRESET_OOLONG, PRESET_COFFEE]
+    _attr_hvac_modes = [
+        HVACMode.OFF,
+        HVAC_MODE_BOIL,
+        HVAC_MODE_GREEN_TEA,
+        HVAC_MODE_OOLONG,
+        HVAC_MODE_COFFEE,
+        HVAC_MODE_MY_TEMP,
+    ]
     _attr_supported_features = (
         ClimateEntityFeature.TARGET_TEMPERATURE
-        | ClimateEntityFeature.PRESET_MODE
         | ClimateEntityFeature.TURN_OFF
         | ClimateEntityFeature.TURN_ON
     )
     _attr_min_temp = MIN_TEMP_F
     _attr_max_temp = MAX_TEMP_F
     _attr_target_temperature_step = 1
+    _attr_precision = 1.0
+    _attr_suggested_display_precision = 0
 
     def __init__(
         self,
@@ -92,7 +110,6 @@ class CosoriKettleClimate(CoordinatorEntity[CosoriKettleCoordinator], ClimateEnt
             "hw_version": coordinator.hardware_version,
             "sw_version": coordinator.software_version,
         }
-        self._preset_mode = None
 
     @property
     def current_temperature(self) -> float | None:
@@ -109,11 +126,18 @@ class CosoriKettleClimate(CoordinatorEntity[CosoriKettleCoordinator], ClimateEnt
         return None
 
     @property
-    def hvac_mode(self) -> HVACMode:
+    def hvac_mode(self) -> str:
         """Return current HVAC mode."""
-        if self.coordinator.data and self.coordinator.data.get("heating"):
-            return HVACMode.HEAT
-        return HVACMode.OFF
+        if not self.coordinator.data:
+            return HVACMode.OFF
+
+        # If not heating, return OFF
+        if not self.coordinator.data.get("heating"):
+            return HVACMode.OFF
+
+        # Map the kettle mode to HVAC mode
+        kettle_mode = self.coordinator.data.get("mode")
+        return KETTLE_MODE_TO_HVAC_MODE.get(kettle_mode, HVAC_MODE_MY_TEMP)
 
     @property
     def hvac_action(self) -> HVACAction:
@@ -125,59 +149,50 @@ class CosoriKettleClimate(CoordinatorEntity[CosoriKettleCoordinator], ClimateEnt
                 return HVACAction.IDLE
         return HVACAction.OFF
 
-    @property
-    def preset_mode(self) -> str | None:
-        """Return current preset mode."""
-        if self.coordinator.data:
-            mode = self.coordinator.data.get("mode")
-            return MODE_TO_PRESET.get(mode)
-        return None
-
     async def async_set_temperature(self, **kwargs: Any) -> None:
-        """Set target temperature."""
+        """Set target temperature.
+
+        If the temperature is within 1 degree C (~2 deg F) of a preset mode,
+        use that mode. Otherwise use MY_TEMP mode.
+        """
         if (temperature := kwargs.get(ATTR_TEMPERATURE)) is None:
             return
 
         temp_f = int(temperature)
-        await self.coordinator.async_set_mode(MODE_MY_TEMP, temp_f, 0)
-        await self.coordinator.async_request_refresh()
 
-    async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
-        """Set HVAC mode."""
-        if hvac_mode == HVACMode.OFF:
-            await self.coordinator.async_stop_heating()
-        elif hvac_mode == HVACMode.HEAT:
-            # Start heating to current my_temp or default
-            temp_f = self.coordinator.data.get("my_temp", 212) if self.coordinator.data else 212
-            await self.coordinator.async_set_mode(MODE_MY_TEMP, temp_f, 0)
-
-        await self.coordinator.async_request_refresh()
-
-    async def async_set_preset_mode(self, preset_mode: str) -> None:
-        """Set preset mode."""
-        if preset_mode not in PRESET_TO_MODE:
-            return
-
-        mode = PRESET_TO_MODE[preset_mode]
-
-        # Get default temperature for mode
-        if mode == MODE_BOIL:
-            temp_f = 212
-        elif mode == MODE_GREEN_TEA:
-            temp_f = 180
-        elif mode == MODE_OOLONG:
-            temp_f = 195
-        elif mode == MODE_COFFEE:
-            temp_f = 205
-        else:
-            temp_f = 212
+        # Find the closest mode temperature within 2 degrees F (approximately 1 degree C)
+        mode = MODE_MY_TEMP
+        for kettle_mode, preset_temp in MODE_TEMPS.items():
+            if abs(temp_f - preset_temp) <= 2:
+                mode = kettle_mode
+                temp_f = preset_temp  # Use the exact preset temperature
+                break
 
         await self.coordinator.async_set_mode(mode, temp_f, 0)
         await self.coordinator.async_request_refresh()
 
+    async def async_set_hvac_mode(self, hvac_mode: str) -> None:
+        """Set HVAC mode."""
+        if hvac_mode == HVACMode.OFF:
+            await self.coordinator.async_stop_heating()
+        elif hvac_mode in HVAC_MODE_TO_KETTLE_MODE:
+            # Get the kettle mode
+            kettle_mode = HVAC_MODE_TO_KETTLE_MODE[hvac_mode]
+
+            # Get the temperature for this mode
+            if kettle_mode in MODE_TEMPS:
+                temp_f = MODE_TEMPS[kettle_mode]
+            else:
+                # MY_TEMP mode - use current my_temp or default
+                temp_f = self.coordinator.data.get("my_temp", 212) if self.coordinator.data else 212
+
+            await self.coordinator.async_set_mode(kettle_mode, temp_f, 0)
+
+        await self.coordinator.async_request_refresh()
+
     async def async_turn_on(self) -> None:
         """Turn on."""
-        await self.async_set_hvac_mode(HVACMode.HEAT)
+        await self.async_set_hvac_mode(HVAC_MODE_MY_TEMP)
 
     async def async_turn_off(self) -> None:
         """Turn off."""
