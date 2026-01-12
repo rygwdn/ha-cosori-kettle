@@ -125,11 +125,14 @@ class CosoriKettleBLEClient:
         _LOGGER.debug("Connecting to %s", self._ble_device.address)
 
         try:
-            self._client = BleakClient(
+            from bleak_retry_connector import establish_connection
+
+            self._client = await establish_connection(
+                BleakClient,
                 self._ble_device,
+                self._ble_device.address,
                 disconnected_callback=self._on_disconnect,
             )
-            await self._client.connect()
 
             # Subscribe to notifications
             await self._client.start_notify(CHAR_RX_UUID, self._notification_handler)
