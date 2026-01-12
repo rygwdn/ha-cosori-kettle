@@ -19,6 +19,15 @@
           "pairing_mode": "Setup method"
         }
       },
+      "capture_packets": {
+        "title": "Parse Bluetooth Packets",
+        "description": "Paste the three packets captured from the Cosori mobile app. Each packet should be on a separate line (20 bytes, 20 bytes, 2 bytes).",
+        "data": {
+          "packet1": "First packet (20 bytes)",
+          "packet2": "Second packet (20 bytes)",
+          "packet3": "Third packet (2 bytes)"
+        }
+      },
       "pair_device": {
         "title": "Pair New Device",
         "description": "Put your kettle into pairing mode, then click Submit to pair. A new registration key will be generated automatically."
@@ -37,7 +46,10 @@
       "invalid_key": "Registration key was rejected by device. Check the key and try again.",
       "invalid_key_length": "Registration key must be exactly 32 hexadecimal characters.",
       "invalid_key_format": "Invalid registration key format. Use only 0-9, A-F.",
-      "connection_failed": "Failed to connect. Ensure device is nearby and try again."
+      "connection_failed": "Failed to connect. Ensure device is nearby and try again.",
+      "invalid_packet_format": "Invalid packet format. Remove all spaces and colons, use only hex characters.",
+      "invalid_packet_length": "Packet length incorrect. First packet: 20 bytes (40 hex chars), second: 20 bytes, third: 2 bytes (4 hex chars).",
+      "packet_parse_failed": "Failed to parse packets. Ensure they are the correct hello sequence packets."
     },
     "abort": {
       "already_configured": "Device is already configured",

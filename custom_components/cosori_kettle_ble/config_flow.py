@@ -19,6 +19,7 @@ from .cosori_kettle.exceptions import (
     InvalidRegistrationKeyError,
 )
 from .cosori_kettle.kettle import CosoriKettle
+from .cosori_kettle.protocol import parse_registration_key_from_packets
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -82,6 +83,8 @@ class CosoriKettleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
             if self._pairing_mode == "new":
                 return await self.async_step_pair_device()
+            elif self._pairing_mode == "capture":
+                return await self.async_step_capture_packets()
             else:
                 return await self.async_step_enter_key()
 
@@ -93,6 +96,7 @@ class CosoriKettleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         {
                             "new": "Pair a new device (device must be in pairing mode)",
                             "existing": "I have an existing registration key",
+                            "capture": "Extract key from captured Bluetooth packets",
                         }
                     ),
                 }
@@ -218,6 +222,87 @@ class CosoriKettleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             data_schema=vol.Schema(
                 {
                     vol.Required("registration_key"): str,
+                }
+            ),
+            errors=errors,
+            description_placeholders={
+                "name": (
+                    self._discovery_info.name or "Cosori Kettle"
+                    if self._discovery_info
+                    else "Cosori Kettle"
+                ),
+            },
+        )
+
+    async def async_step_capture_packets(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Parse registration key from captured Bluetooth packets."""
+        errors = {}
+
+        if user_input is not None:
+            assert self._selected_address is not None
+
+            packet1 = user_input["packet1"].strip()
+            packet2 = user_input["packet2"].strip()
+            packet3 = user_input["packet3"].strip()
+
+            # Try to parse the registration key
+            try:
+                registration_key = parse_registration_key_from_packets(
+                    packet1, packet2, packet3
+                )
+
+                # Get BLE device
+                ble_device = bluetooth.async_ble_device_from_address(
+                    self.hass, self._selected_address, connectable=True
+                )
+
+                if ble_device is None:
+                    return self.async_abort(reason="device_not_found")
+
+                # Test key by connecting
+                try:
+                    async with CosoriKettle(ble_device, registration_key) as kettle:
+                        # connect() calls _send_hello() which validates key
+                        pass  # If we get here, key is valid
+
+                    # Success! Create config entry
+                    return self.async_create_entry(
+                        title=self._discovery_info.name or "Cosori Kettle"
+                        if self._discovery_info
+                        else "Cosori Kettle",
+                        data={
+                            CONF_DEVICE_ID: self._selected_address,
+                            CONF_ADDRESS: self._selected_address,
+                            CONF_REGISTRATION_KEY: registration_key.hex(),
+                        },
+                    )
+
+                except InvalidRegistrationKeyError:
+                    errors["base"] = "invalid_key"
+                except Exception as err:
+                    _LOGGER.exception("Failed to validate key: %s", err)
+                    errors["base"] = "connection_failed"
+
+            except ValueError as err:
+                _LOGGER.debug("Failed to parse packets: %s", err)
+                # Determine which error to show based on the exception message
+                err_msg = str(err).lower()
+                if "length" in err_msg or "bytes" in err_msg:
+                    errors["base"] = "invalid_packet_length"
+                elif "hex" in err_msg or "format" in err_msg:
+                    errors["base"] = "invalid_packet_format"
+                else:
+                    errors["base"] = "packet_parse_failed"
+
+        return self.async_show_form(
+            step_id="capture_packets",
+            data_schema=vol.Schema(
+                {
+                    vol.Required("packet1"): str,
+                    vol.Required("packet2"): str,
+                    vol.Required("packet3"): str,
                 }
             ),
             errors=errors,

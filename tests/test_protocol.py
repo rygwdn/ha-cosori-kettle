@@ -11,6 +11,7 @@ from custom_components.cosori_kettle_ble.cosori_kettle.protocol import (
     parse_compact_status,
     parse_extended_status,
     parse_frames,
+    parse_registration_key_from_packets,
     split_into_packets,
 )
 
@@ -722,3 +723,105 @@ def test_detect_protocol_version_hw_takes_precedence():
     # Even with old SW, HW 1.0.00 should give V1
     version = detect_protocol_version("1.0.00", "R0006V0001")
     assert version == PROTOCOL_VERSION_V1
+
+
+def test_parse_registration_key_from_packets_valid():
+    """Test parsing valid registration key from captured packets."""
+    # Use the actual protocol to generate a hello message
+    # Registration key: 16 bytes
+    expected_key = bytes.fromhex("0123456789ABCDEF0FEDCBA987654321")
+
+    # Build hello payload like the client does (36 bytes)
+    # payload[0] = protocol_version (0x01)
+    # payload[1] = CMD_HELLO (0x81)
+    # payload[2] = CMD_TYPE_D1 (0xD1)
+    # payload[3] = 0x00
+    # payload[4:] = registration_key.hex() as ASCII (32 bytes)
+    payload = bytearray(36)
+    payload[0] = 0x01
+    payload[1] = 0x81
+    payload[2] = 0xD1
+    payload[3] = 0x00
+    hex_key = expected_key.hex()
+    payload[4:] = hex_key.encode("ascii")
+
+    # Build the frame
+    from custom_components.cosori_kettle_ble.cosori_kettle.protocol import MESSAGE_HEADER_TYPE
+    frame = Frame(frame_type=MESSAGE_HEADER_TYPE, seq=0x1C, payload=bytes(payload))
+    packet = build_packet(frame)
+
+    # Split into BLE-sized chunks (20 bytes each)
+    # Packet is 6 (header) + 36 (payload) = 42 bytes
+    # So chunks will be: 20 + 20 + 2
+    chunks = split_into_packets(packet)
+
+    # Convert chunks to hex strings
+    p1 = chunks[0].hex()
+    p2 = chunks[1].hex()
+    p3 = chunks[2].hex()
+
+    # Parse and verify
+    key = parse_registration_key_from_packets(p1, p2, p3)
+    assert key == expected_key
+
+
+def test_parse_registration_key_from_packets_with_spaces():
+    """Test parsing packets with spaces and colons."""
+    # Same as above but with formatting
+    key_ascii = "30313233343536373839414243444546" + "30313233343536373839414243444546"
+    p1 = f"a5 22 1c 0e 00 ff 01 81 d1 00 {key_ascii[:2]} {key_ascii[2:4]} {key_ascii[4:6]} {key_ascii[6:8]} {key_ascii[8:10]} {key_ascii[10:12]} {key_ascii[12:14]} {key_ascii[14:16]} {key_ascii[16:18]} {key_ascii[18:20]}"
+    p2 = " ".join([key_ascii[i:i+2] for i in range(20, 60, 2)])
+    p3 = " ".join([key_ascii[i:i+2] for i in range(60, 64, 2)])
+
+    key = parse_registration_key_from_packets(p1, p2, p3)
+    expected_key = bytes.fromhex("0123456789ABCDEF0123456789ABCDEF")
+    assert key == expected_key
+
+
+def test_parse_registration_key_from_packets_invalid_length_p1():
+    """Test parsing with first packet wrong length."""
+    with pytest.raises(ValueError, match="First packet must be 40 hex characters"):
+        parse_registration_key_from_packets("a5221c", "00" * 20, "00" * 2)
+
+
+def test_parse_registration_key_from_packets_invalid_length_p2():
+    """Test parsing with second packet wrong length."""
+    with pytest.raises(ValueError, match="Second packet must be 40 hex characters"):
+        parse_registration_key_from_packets("00" * 20, "a5221c", "00" * 2)
+
+
+def test_parse_registration_key_from_packets_invalid_length_p3():
+    """Test parsing with third packet wrong length."""
+    with pytest.raises(ValueError, match="Third packet must be 4 hex characters"):
+        parse_registration_key_from_packets("00" * 20, "00" * 20, "00")
+
+
+def test_parse_registration_key_from_packets_invalid_hex():
+    """Test parsing with invalid hex characters."""
+    with pytest.raises(ValueError, match="Invalid hex format"):
+        parse_registration_key_from_packets("zz" * 20, "00" * 20, "00" * 2)
+
+
+def test_parse_registration_key_from_packets_no_magic_byte():
+    """Test parsing with first packet missing magic byte."""
+    # First byte is not 0xA5
+    p1 = "ff" + "00" * 19
+    p2 = "00" * 20
+    p3 = "00" * 2
+
+    with pytest.raises(ValueError, match="doesn't start with magic byte"):
+        parse_registration_key_from_packets(p1, p2, p3)
+
+
+def test_parse_registration_key_from_packets_wrong_command():
+    """Test parsing with wrong command in first packet."""
+    # Valid structure but not a hello command (0x81d100)
+    # Packet: a5 22 1c 0e 00 XX 01 40 40 00 + padding
+    p1 = "a5221c0e00ff01404000" + "30" * 10  # CMD_POLL instead of CMD_HELLO
+    p2 = "30" * 20
+    p3 = "30" * 2
+
+    with pytest.raises(ValueError, match="doesn't contain hello command"):
+        parse_registration_key_from_packets(p1, p2, p3)
+
+

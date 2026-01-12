@@ -341,3 +341,93 @@ def detect_protocol_version(hw_version: str | None, sw_version: str | None) -> i
 
     # Default to V1 for unknown formats
     return PROTOCOL_VERSION_V1
+
+
+def parse_registration_key_from_packets(packet1: str, packet2: str, packet3: str) -> bytes:
+    """Parse registration key from captured Bluetooth packets.
+
+    The official Cosori app sends three packets when connecting:
+    1. First packet (20 bytes): a5 XX:XX:XX:XX:XX 0181d100 YY:YY:YY:YY:YY:YY:YY:YY:YY:YY
+    2. Second packet (20 bytes): continuation of registration key
+    3. Third packet (2 bytes): final bytes of registration key
+
+    The registration key is encoded in the payload following the hello command (0181d100).
+    The key data starts at byte 10 of the first packet, continues through all of the
+    second packet, and finishes with the third packet. These bytes are ASCII-encoded
+    hex characters that must be decoded to get the final 16-byte registration key.
+
+    Args:
+        packet1: First packet as hex string (can include spaces/colons)
+        packet2: Second packet as hex string (can include spaces/colons)
+        packet3: Third packet as hex string (can include spaces/colons)
+
+    Returns:
+        16-byte registration key
+
+    Raises:
+        ValueError: If packets are malformed or don't match expected format
+    """
+    # Clean up input - remove spaces, colons, and convert to lowercase
+    p1 = packet1.replace(" ", "").replace(":", "").lower()
+    p2 = packet2.replace(" ", "").replace(":", "").lower()
+    p3 = packet3.replace(" ", "").replace(":", "").lower()
+
+    # Validate lengths (20 bytes = 40 hex chars, 2 bytes = 4 hex chars)
+    if len(p1) != 40:
+        raise ValueError(f"First packet must be 40 hex characters (20 bytes), got {len(p1)}")
+    if len(p2) != 40:
+        raise ValueError(f"Second packet must be 40 hex characters (20 bytes), got {len(p2)}")
+    if len(p3) != 4:
+        raise ValueError(f"Third packet must be 4 hex characters (2 bytes), got {len(p3)}")
+
+    # Validate hex format
+    try:
+        bytes.fromhex(p1)
+        bytes.fromhex(p2)
+        bytes.fromhex(p3)
+    except ValueError as e:
+        raise ValueError(f"Invalid hex format in packets: {e}")
+
+    # Parse first packet as a frame to validate it's a hello command
+    try:
+        packet1_bytes = bytes.fromhex(p1)
+        # Check magic byte and validate it's a hello command
+        if packet1_bytes[0] != FRAME_MAGIC:
+            raise ValueError(f"First packet doesn't start with magic byte (0xA5), got {packet1_bytes[0]:02x}")
+
+        # Extract payload - should contain 0181d100 or 0081d100 (hello command)
+        # Packet structure: [A5][type][seq][len_lo][len_hi][checksum][payload...]
+        payload_start = 6
+        if len(packet1_bytes) > payload_start + 4:
+            # Check for hello command (0x01 0x81 0xd1 0x00 or 0x00 0x81 0xd1 0x00)
+            cmd_bytes = packet1_bytes[payload_start:payload_start+4]
+            if cmd_bytes[1:4] != b'\x81\xd1\x00':
+                raise ValueError(f"First packet doesn't contain hello command (0x81d100), got {cmd_bytes.hex()}")
+    except (IndexError, ValueError) as e:
+        raise ValueError(f"Failed to parse first packet structure: {e}")
+
+    # Extract the registration key data
+    # First packet: bytes 10-19 (10 bytes after the 0181d100 command)
+    # Second packet: all 20 bytes
+    # Third packet: 2 bytes
+    # Total: 32 ASCII characters (64 hex chars) encoding 16-byte hex key
+
+    # Take last 10 bytes from p1 (20 hex chars), all of p2 (40 hex chars), and all of p3 (4 hex chars)
+    # Total: 64 hex chars = 32 bytes of ASCII data
+    key_ascii_hex = p1[20:] + p2 + p3  # 20 + 40 + 4 = 64 hex chars = 32 bytes
+
+    # The 32 bytes (64 hex chars) represent ASCII-encoded hex string
+    # Convert to bytes to get ASCII characters
+    try:
+        ascii_bytes = bytes.fromhex(key_ascii_hex)
+        # Decode ASCII to get the hex string of the actual key
+        key_hex_string = ascii_bytes.decode('ascii')
+        # Convert hex string to final 16-byte key
+        registration_key = bytes.fromhex(key_hex_string)
+    except (ValueError, UnicodeDecodeError) as e:
+        raise ValueError(f"Failed to decode registration key from packets: {e}")
+
+    if len(registration_key) != 16:
+        raise ValueError(f"Registration key must be 16 bytes, got {len(registration_key)}")
+
+    return registration_key

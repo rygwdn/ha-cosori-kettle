@@ -42,6 +42,7 @@ from .protocol import (
     build_packet,
     parse_extended_status,
     parse_frames,
+    parse_registration_key_from_packets,
 )
 
 __all__ = [
@@ -66,4 +67,5 @@ __all__ = [
     "build_packet",
     "parse_extended_status",
     "parse_frames",
+    "parse_registration_key_from_packets",
 ]

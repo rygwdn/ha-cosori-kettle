@@ -44,6 +44,38 @@ The integration supports automatic Bluetooth discovery. Your kettle must be:
 - Within Bluetooth range
 - **NOT connected to another device** (disconnect from official app first)
 
+### Capturing Registration Key from Mobile App
+
+If you've already paired your kettle with the official Cosori mobile app, you can extract the registration key by capturing Bluetooth traffic:
+
+#### iOS/macOS
+Use PacketLogger via Apple's Bluetooth debugging profile:
+- Follow the guide at: https://www.bluetooth.com/blog/a-new-way-to-debug-iosbluetooth-applications/
+- Open the Cosori app and connect to your kettle
+- Look for three consecutive packets sent to the kettle
+
+#### Android
+Use Android's built-in Bluetooth HCI snoop log:
+- Guide: https://sps-support.honeywell.com/s/article/How-to-capture-Bluetooth-traffic-from-and-to-an-Android-Device
+- Enable Bluetooth HCI snoop log in Developer Options
+- Open the Cosori app and connect to your kettle
+- Retrieve the btsnoop_hci.log file
+
+#### Extracting the Registration Key
+
+When you open the app, it sends three consecutive packets to the kettle. Look for:
+1. **First packet** (exactly 20 bytes): `a5 XX:XX:XX:XX:XX 0181d100 YY:YY:YY:YY:YY:YY:YY:YY:YY:YY`
+2. **Second packet** (exactly 20 bytes): Full payload is needed
+3. **Third packet** (exactly 2 bytes): Final bytes needed
+
+The registration key is formed by:
+- Taking the last 10 bytes from the first packet (after the `0181d100` command bytes)
+- Concatenating with all 20 bytes from the second packet
+- Concatenating with all 2 bytes from the third packet
+- These 32 bytes are ASCII-encoded hex characters representing the 16-byte registration key
+
+The Home Assistant config flow includes a helper to parse these packets automatically. Simply paste the three raw packets into the config UI.
+
 ---
 
 # Finding Your Kettle's MAC Address
