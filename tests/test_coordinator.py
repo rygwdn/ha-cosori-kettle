@@ -729,6 +729,198 @@ class TestCoordinatorUpdateDataFromStatus:
             assert data["heating"] is False
 
 
+class TestCoordinatorCompactStatusHandler:
+    """Test _update_data_from_compact_status and state change detection."""
+
+    def test_update_data_from_compact_status_initial(self, coordinator):
+        """Test compact status updates when no previous data."""
+        from custom_components.cosori_kettle_ble.cosori_kettle.protocol import CompactStatus
+
+        status = CompactStatus(
+            stage=1,
+            mode=0x04,
+            setpoint=212,
+            temp=92,
+            valid=True,
+        )
+
+        with patch.object(coordinator, "async_set_updated_data") as mock_set, \
+             patch("asyncio.create_task") as mock_create_task:
+            coordinator._update_data_from_compact_status(status)
+
+            # Should update data
+            mock_set.assert_called_once()
+            data = mock_set.call_args[0][0]
+            assert data["stage"] == 1
+            assert data["mode"] == 0x04
+            assert data["setpoint"] == 212
+            assert data["temperature"] == 92
+            assert data["heating"] is True
+
+            # Should NOT trigger full status request (no previous data to compare)
+            mock_create_task.assert_not_called()
+
+    def test_update_data_from_compact_status_no_state_change(self, coordinator):
+        """Test compact status when only temperature changes."""
+        from custom_components.cosori_kettle_ble.cosori_kettle.protocol import CompactStatus
+
+        # Set initial data
+        coordinator.data = {
+            "stage": 1,
+            "mode": 0x04,
+            "setpoint": 212,
+            "temperature": 92,
+            "heating": True,
+        }
+
+        status = CompactStatus(
+            stage=1,  # same
+            mode=0x04,  # same
+            setpoint=212,  # same
+            temp=105,  # changed (temperature)
+            valid=True,
+        )
+
+        with patch.object(coordinator, "async_set_updated_data") as mock_set, \
+             patch("asyncio.create_task") as mock_create_task:
+            coordinator._update_data_from_compact_status(status)
+
+            # Should update data
+            mock_set.assert_called_once()
+            data = mock_set.call_args[0][0]
+            assert data["temperature"] == 105
+
+            # Should NOT trigger full status request (only temperature changed)
+            mock_create_task.assert_not_called()
+
+    def test_update_data_from_compact_status_stage_change(self, coordinator):
+        """Test compact status when stage changes."""
+        from custom_components.cosori_kettle_ble.cosori_kettle.protocol import CompactStatus
+
+        # Set initial data
+        coordinator.data = {
+            "stage": 0,  # idle
+            "mode": 0x04,
+            "setpoint": 212,
+            "temperature": 72,
+            "heating": False,
+        }
+
+        status = CompactStatus(
+            stage=1,  # CHANGED: started heating
+            mode=0x04,
+            setpoint=212,
+            temp=75,
+            valid=True,
+        )
+
+        with patch.object(coordinator, "async_set_updated_data") as mock_set, \
+             patch("asyncio.create_task") as mock_create_task:
+            coordinator._update_data_from_compact_status(status)
+
+            # Should update data
+            mock_set.assert_called_once()
+            data = mock_set.call_args[0][0]
+            assert data["stage"] == 1
+            assert data["heating"] is True
+
+            # Should trigger full status request (stage changed)
+            mock_create_task.assert_called_once()
+
+    def test_update_data_from_compact_status_mode_change(self, coordinator):
+        """Test compact status when mode changes."""
+        from custom_components.cosori_kettle_ble.cosori_kettle.protocol import CompactStatus
+
+        # Set initial data
+        coordinator.data = {
+            "stage": 1,
+            "mode": 0x04,  # boil
+            "setpoint": 212,
+            "temperature": 72,
+            "heating": True,
+        }
+
+        status = CompactStatus(
+            stage=1,
+            mode=0x01,  # CHANGED: to warm mode
+            setpoint=160,
+            temp=75,
+            valid=True,
+        )
+
+        with patch.object(coordinator, "async_set_updated_data") as mock_set, \
+             patch("asyncio.create_task") as mock_create_task:
+            coordinator._update_data_from_compact_status(status)
+
+            # Should update data
+            mock_set.assert_called_once()
+            data = mock_set.call_args[0][0]
+            assert data["mode"] == 0x01
+
+            # Should trigger full status request (mode changed)
+            mock_create_task.assert_called_once()
+
+    def test_update_data_from_compact_status_setpoint_change(self, coordinator):
+        """Test compact status when setpoint changes."""
+        from custom_components.cosori_kettle_ble.cosori_kettle.protocol import CompactStatus
+
+        # Set initial data
+        coordinator.data = {
+            "stage": 1,
+            "mode": 0x04,
+            "setpoint": 212,
+            "temperature": 72,
+            "heating": True,
+        }
+
+        status = CompactStatus(
+            stage=1,
+            mode=0x04,
+            setpoint=180,  # CHANGED: lower setpoint
+            temp=75,
+            valid=True,
+        )
+
+        with patch.object(coordinator, "async_set_updated_data") as mock_set, \
+             patch("asyncio.create_task") as mock_create_task:
+            coordinator._update_data_from_compact_status(status)
+
+            # Should update data
+            mock_set.assert_called_once()
+            data = mock_set.call_args[0][0]
+            assert data["setpoint"] == 180
+
+            # Should trigger full status request (setpoint changed)
+            mock_create_task.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_request_full_status_success(self, coordinator, mock_cosori_client):
+        """Test _request_full_status sends status request."""
+        coordinator._client = mock_cosori_client
+
+        await coordinator._request_full_status()
+
+        # Should have sent status request
+        mock_cosori_client.send_status_request.assert_called_once_with(wait_for_ack=True)
+
+    @pytest.mark.asyncio
+    async def test_request_full_status_not_connected(self, coordinator):
+        """Test _request_full_status when not connected."""
+        coordinator._client = None
+
+        # Should not raise, just log and return
+        await coordinator._request_full_status()
+
+    @pytest.mark.asyncio
+    async def test_request_full_status_timeout(self, coordinator, mock_cosori_client):
+        """Test _request_full_status handles timeout gracefully."""
+        coordinator._client = mock_cosori_client
+        mock_cosori_client.send_status_request.side_effect = asyncio.TimeoutError()
+
+        # Should not raise, just log and return
+        await coordinator._request_full_status()
+
+
 class TestCoordinatorIntegration:
     """Integration tests."""
 

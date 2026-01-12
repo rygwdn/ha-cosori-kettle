@@ -274,6 +274,36 @@ class CosoriKettleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Start with existing data to preserve extended fields
         data = self.data.copy() if self.data else {}
 
+        # Detect state changes (not just temperature changes)
+        state_changed = False
+        if self.data:
+            # Check for stage change (heating state)
+            if data.get("stage") != status.stage:
+                _LOGGER.debug(
+                    "Stage changed: %s -> %s",
+                    data.get("stage"),
+                    status.stage,
+                )
+                state_changed = True
+
+            # Check for mode change
+            if data.get("mode") != status.mode:
+                _LOGGER.debug(
+                    "Mode changed: %s -> %s",
+                    data.get("mode"),
+                    status.mode,
+                )
+                state_changed = True
+
+            # Check for setpoint change
+            if data.get("setpoint") != status.setpoint:
+                _LOGGER.debug(
+                    "Setpoint changed: %s -> %s",
+                    data.get("setpoint"),
+                    status.setpoint,
+                )
+                state_changed = True
+
         # Update common fields from compact status
         data.update({
             "stage": status.stage,
@@ -291,6 +321,30 @@ class CosoriKettleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         data.setdefault("baby_formula_enabled", False)
 
         self.async_set_updated_data(data)
+
+        # If state changed (not just temperature), request full status immediately
+        if state_changed:
+            _LOGGER.debug("State change detected in compact status, requesting full status")
+            asyncio.create_task(self._request_full_status())
+
+    async def _request_full_status(self) -> None:
+        """Request a full status update from the kettle.
+
+        Called asynchronously when a state change is detected in compact status
+        to get extended fields like remaining_hold_time, on_base, etc.
+        """
+        async with self._lock:
+            try:
+                if not self._client or not self._client.is_connected:
+                    _LOGGER.debug("Cannot request full status: not connected")
+                    return
+
+                _LOGGER.debug("Requesting full status after state change")
+                await self._client.send_status_request(wait_for_ack=True)
+            except asyncio.TimeoutError:
+                _LOGGER.debug("Timeout requesting full status after state change")
+            except BleakError as err:
+                _LOGGER.debug("Error requesting full status: %s", err)
 
     async def _send_hello(self) -> None:
         """Send hello packet.
