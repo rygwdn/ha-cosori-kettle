@@ -8,7 +8,6 @@ The Cosori kettle uses a proprietary BLE protocol for bidirectional communicatio
 
 ### V0 Protocol (Legacy)
 - Basic temperature control using setpoint commands
-- Requires hello5 handshake before setpoint
 - Limited to boil and heat modes
 
 ### V1 Protocol (Current)
@@ -16,7 +15,6 @@ The Cosori kettle uses a proprietary BLE protocol for bidirectional communicatio
 - Registration/pairing support
 - Baby formula mode
 - Completion notifications
-- No hello5 required
 
 Both protocols support:
 - Reading kettle status (temperature, heating state, on-base detection)
