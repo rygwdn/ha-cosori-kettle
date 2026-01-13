@@ -317,6 +317,7 @@ uv run pytest tests/ha_component/ -v
 
 # Credits
 
+- Built on top of the original ESPHome implementation: https://github.com/barrymichels/CosoriKettleBLE
 - Protocol reverse-engineered using Wireshark and Python/Bleak
 
 ## License
