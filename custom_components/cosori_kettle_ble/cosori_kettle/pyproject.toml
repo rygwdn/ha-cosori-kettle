@@ -32,9 +32,9 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/rygwdn/CosoriKettleBLE"
-Repository = "https://github.com/rygwdn/CosoriKettleBLE"
-Issues = "https://github.com/rygwdn/CosoriKettleBLE/issues"
+Homepage = "https://github.com/rygwdn/ha-cosori-kettle"
+Repository = "https://github.com/rygwdn/ha-cosori-kettle"
+Issues = "https://github.com/rygwdn/ha-cosori-kettle/issues"
 
 [build-system]
 requires = ["hatchling"]

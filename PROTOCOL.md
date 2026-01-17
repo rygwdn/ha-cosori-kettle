@@ -2,15 +2,21 @@
 
 This document describes the custom Bluetooth Low Energy protocol used by the Cosori Smart Electric Kettle for communication between the kettle and control devices (smartphone apps, etc.).
 
+> [!NOTE]
+> This information is based on the work originally done by @barrymichels [here](https://github.com/barrymichels/CosoriKettleBLE/blob/6ff191a84f36a8e35849e5486f4af15408823cec/PROTOCOL.md) and extended with details captured from additional devices.
+
+> [!WARNING]
+> THE INFORMATION HERE IS BASED ON BEST GUESSES AND NOT OFFICIAL INFORMATION. Use with caution.
+
 ## Overview
 
-The Cosori kettle uses a proprietary BLE protocol for bidirectional communication. The protocol has evolved through two versions:
+The Cosori kettle uses a proprietary BLE protocol for bidirectional communication. The protocol appears to have two versions:
 
-### V0 Protocol (Legacy)
+### V0 Protocol
 - Basic temperature control using setpoint commands
 - Limited to boil and heat modes
 
-### V1 Protocol (Current)
+### V1 Protocol
 - Advanced features: delayed start, hold/keep-warm timers, custom temperature
 - Registration/pairing support
 - Baby formula mode
@@ -37,15 +43,11 @@ The kettle exposes two primary GATT characteristics:
 **20-Byte Chunking for TX (Controller → Kettle):**
 - BLE characteristic writes are limited to 20 bytes per write
 - Packets larger than 20 bytes MUST be split into 20-byte chunks when sending
-- Example: 35-byte status ACK packet = 20 bytes + 15 bytes (if sending to kettle)
 - Chunks are sent sequentially without additional framing
 
 **Packet Sizes:**
 - Envelope: 6 bytes (fixed)
-- Status request: 10 bytes total (6 envelope + 4 payload) - single write
-- Compact status: 18 bytes total (6 + 12) - single write  
-- Status ACK: 35 bytes total (6 + 29) - requires 2 writes if sending
-- V1 commands: varies (9-15 bytes typically) - single write
+- Status request: 10 bytes total (6 envelope + 4 payload)
 
 **RX (Kettle → Controller) - Single Complete Messages:**
 - Kettle sends complete messages as single notifications
@@ -56,11 +58,11 @@ The kettle exposes two primary GATT characteristics:
 **Request/Response Pattern:**
 1. Controller writes command to TX characteristic (0xFFF2)
    - Split into 20-byte chunks if needed
-2. Kettle sends response via RX notification characteristic (0xFFF1)
+   - Wait for bluetooth protocol ack (not kettle protocol ack). This is handled automatically by libraries like `bleak`
+2. Kettle sends via RX notification characteristic (0xFFF1)
    - Always complete messages (no chunking)
 3. Response types:
    - Command ACK (frame type 0x12, 4-5 bytes payload)
-   - Status ACK (frame type 0x12, 29 bytes payload) - response to status request
    - Compact status (frame type 0x22, 12 bytes payload) - unsolicited updates
    - Completion notification (frame type 0x22, 5 bytes payload)
 
@@ -76,12 +78,6 @@ Kettle → RX: Compact status showing new setpoint [single notification]
 Controller → TX: Status request (A522 4104 0072 0140 4000) [single write]
 Kettle → RX: Status ACK (35 bytes) [single notification - complete packet]
 ```
-
-**Implementation Notes:**
-- **TX (sending):** Split packets >20 bytes into 20-byte chunks
-- **RX (receiving):** Process complete packets as received
-- Validate magic byte (0xA5) at start of each packet
-- Validate checksum before processing
 
 ## Packet Structure
 
