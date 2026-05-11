@@ -462,6 +462,11 @@ class CosoriKettleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         async with self._lock:
             await self._client.send_set_baby_formula(enabled)
 
+    async def async_set_hold_time(self, seconds: int) -> None:
+        """Set keep warm hold time in seconds (0 disables)."""
+        async with self._lock:
+            await self._client.send_set_hold_time(seconds)
+
     async def async_stop_heating(self) -> None:
         """Stop heating."""
         async with self._lock:
