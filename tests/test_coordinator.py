@@ -1,14 +1,18 @@
 """Tests for the CosoriKettleCoordinator class."""
 import asyncio
+import time
 from unittest.mock import AsyncMock, MagicMock, Mock, patch, call
 import pytest
 
 from custom_components.cosori_kettle_ble.coordinator import CosoriKettleCoordinator
 from custom_components.cosori_kettle_ble.const import (
     ACK_HEADER_TYPE,
+    ACTIVE_POLL_INTERVAL,
+    ACTIVE_POLL_WINDOW,
     CHAR_RX_UUID,
     CHAR_TX_UUID,
     DOMAIN,
+    IDLE_TIMEOUT_SECS,
     MESSAGE_HEADER_TYPE,
     PROTOCOL_VERSION_V1,
     SERVICE_UUID,
@@ -745,6 +749,7 @@ class TestCoordinatorCompactStatusHandler:
         )
 
         with patch.object(coordinator, "async_set_updated_data") as mock_set, \
+             patch.object(coordinator, "_enter_active_polling") as mock_enter, \
              patch("asyncio.create_task") as mock_create_task:
             coordinator._update_data_from_compact_status(status)
 
@@ -757,7 +762,8 @@ class TestCoordinatorCompactStatusHandler:
             assert data["temperature"] == 92
             assert data["heating"] is True
 
-            # Should NOT trigger full status request (no previous data to compare)
+            # Should NOT trigger active polling or full status (no previous data to compare)
+            mock_enter.assert_not_called()
             mock_create_task.assert_not_called()
 
     def test_update_data_from_compact_status_no_state_change(self, coordinator):
@@ -782,6 +788,7 @@ class TestCoordinatorCompactStatusHandler:
         )
 
         with patch.object(coordinator, "async_set_updated_data") as mock_set, \
+             patch.object(coordinator, "_enter_active_polling") as mock_enter, \
              patch("asyncio.create_task") as mock_create_task:
             coordinator._update_data_from_compact_status(status)
 
@@ -790,7 +797,8 @@ class TestCoordinatorCompactStatusHandler:
             data = mock_set.call_args[0][0]
             assert data["temperature"] == 105
 
-            # Should NOT trigger full status request (only temperature changed)
+            # Should NOT trigger active polling or full status (only temperature changed)
+            mock_enter.assert_not_called()
             mock_create_task.assert_not_called()
 
     def test_update_data_from_compact_status_stage_change(self, coordinator):
@@ -820,6 +828,7 @@ class TestCoordinatorCompactStatusHandler:
             return MagicMock()
 
         with patch.object(coordinator, "async_set_updated_data") as mock_set, \
+             patch.object(coordinator, "_enter_active_polling") as mock_enter, \
              patch("asyncio.create_task", side_effect=close_coro) as mock_create_task:
             coordinator._update_data_from_compact_status(status)
 
@@ -829,7 +838,8 @@ class TestCoordinatorCompactStatusHandler:
             assert data["stage"] == 1
             assert data["heating"] is True
 
-            # Should trigger full status request (stage changed)
+            # Should enter active polling and trigger full status request (stage changed)
+            mock_enter.assert_called_once()
             mock_create_task.assert_called_once()
 
     def test_update_data_from_compact_status_mode_change(self, coordinator):
@@ -859,6 +869,7 @@ class TestCoordinatorCompactStatusHandler:
             return MagicMock()
 
         with patch.object(coordinator, "async_set_updated_data") as mock_set, \
+             patch.object(coordinator, "_enter_active_polling") as mock_enter, \
              patch("asyncio.create_task", side_effect=close_coro) as mock_create_task:
             coordinator._update_data_from_compact_status(status)
 
@@ -867,7 +878,8 @@ class TestCoordinatorCompactStatusHandler:
             data = mock_set.call_args[0][0]
             assert data["mode"] == 0x01
 
-            # Should trigger full status request (mode changed)
+            # Should enter active polling and trigger full status request (mode changed)
+            mock_enter.assert_called_once()
             mock_create_task.assert_called_once()
 
     def test_update_data_from_compact_status_setpoint_change(self, coordinator):
@@ -897,6 +909,7 @@ class TestCoordinatorCompactStatusHandler:
             return MagicMock()
 
         with patch.object(coordinator, "async_set_updated_data") as mock_set, \
+             patch.object(coordinator, "_enter_active_polling") as mock_enter, \
              patch("asyncio.create_task", side_effect=close_coro) as mock_create_task:
             coordinator._update_data_from_compact_status(status)
 
@@ -905,7 +918,8 @@ class TestCoordinatorCompactStatusHandler:
             data = mock_set.call_args[0][0]
             assert data["setpoint"] == 180
 
-            # Should trigger full status request (setpoint changed)
+            # Should enter active polling and trigger full status request (setpoint changed)
+            mock_enter.assert_called_once()
             mock_create_task.assert_called_once()
 
     @pytest.mark.asyncio
@@ -934,6 +948,168 @@ class TestCoordinatorCompactStatusHandler:
 
         # Should not raise, just log and return
         await coordinator._request_full_status()
+
+
+class TestCoordinatorActivePolling:
+    """Test adaptive polling after major state changes."""
+
+    def test_enter_active_polling_sets_timestamp(self, coordinator):
+        """Test that _enter_active_polling records the change timestamp."""
+        assert coordinator._last_major_change_at is None
+        with patch.object(coordinator, "_schedule_refresh"):
+            coordinator._enter_active_polling()
+        assert coordinator._last_major_change_at is not None
+        assert time.monotonic() - coordinator._last_major_change_at < 1.0
+
+    def test_enter_active_polling_changes_interval(self, coordinator):
+        """Test that _enter_active_polling switches to 1-minute poll interval."""
+        from datetime import timedelta
+        with patch.object(coordinator, "_schedule_refresh"):
+            coordinator._enter_active_polling()
+        assert coordinator.update_interval == timedelta(seconds=ACTIVE_POLL_INTERVAL)
+
+    def test_enter_active_polling_updates_timestamp_each_call(self, coordinator):
+        """Test that repeated calls refresh the timestamp."""
+        with patch.object(coordinator, "_schedule_refresh"):
+            coordinator._enter_active_polling()
+            t1 = coordinator._last_major_change_at
+            coordinator._enter_active_polling()
+            t2 = coordinator._last_major_change_at
+        assert t2 >= t1
+
+    def test_frame_handler_records_last_frame_time(self, coordinator, sample_status_payload):
+        """Test that _frame_handler updates _last_frame_received_at."""
+        assert coordinator._last_frame_received_at is None
+        frame = Frame(frame_type=MESSAGE_HEADER_TYPE, seq=0x01, payload=sample_status_payload)
+        with patch.object(coordinator, "_update_data_from_status"):
+            coordinator._frame_handler(frame)
+        assert coordinator._last_frame_received_at is not None
+        assert time.monotonic() - coordinator._last_frame_received_at < 1.0
+
+    def test_update_data_from_status_triggers_active_polling_on_on_base_change(self, coordinator):
+        """Test that on_base change in extended status triggers active polling."""
+        coordinator.data = {
+            "stage": 0, "mode": 0x04, "setpoint": 212,
+            "temperature": 72, "on_base": False,
+        }
+        from custom_components.cosori_kettle_ble.cosori_kettle.protocol import ExtendedStatus
+        status = ExtendedStatus(
+            stage=0, mode=0x04, setpoint=212, temp=72, my_temp=140,
+            configured_hold_time=0, remaining_hold_time=0,
+            on_base=True,  # CHANGED
+            baby_formula_enabled=False, valid=True,
+        )
+        # _enter_active_polling is mocked to prevent timer creation in tests
+        with patch.object(coordinator, "async_set_updated_data"), \
+             patch.object(coordinator, "_enter_active_polling") as mock_enter:
+            coordinator._update_data_from_status(status)
+            mock_enter.assert_called_once()
+
+    def test_update_data_from_status_triggers_active_polling_on_stage_change(self, coordinator):
+        """Test that stage change in extended status triggers active polling."""
+        coordinator.data = {
+            "stage": 0, "mode": 0x04, "setpoint": 212,
+            "temperature": 72, "on_base": True,
+        }
+        from custom_components.cosori_kettle_ble.cosori_kettle.protocol import ExtendedStatus
+        status = ExtendedStatus(
+            stage=1,  # CHANGED
+            mode=0x04, setpoint=212, temp=75, my_temp=140,
+            configured_hold_time=0, remaining_hold_time=0,
+            on_base=True, baby_formula_enabled=False, valid=True,
+        )
+        with patch.object(coordinator, "async_set_updated_data"), \
+             patch.object(coordinator, "_enter_active_polling") as mock_enter:
+            coordinator._update_data_from_status(status)
+            mock_enter.assert_called_once()
+
+    def test_update_data_from_status_no_active_polling_when_unchanged(self, coordinator):
+        """Test that no major change in extended status skips active polling."""
+        coordinator.data = {
+            "stage": 1, "mode": 0x04, "setpoint": 212,
+            "temperature": 92, "on_base": True,
+        }
+        from custom_components.cosori_kettle_ble.cosori_kettle.protocol import ExtendedStatus
+        status = ExtendedStatus(
+            stage=1, mode=0x04, setpoint=212, temp=95,  # only temp changed
+            my_temp=140, configured_hold_time=0, remaining_hold_time=0,
+            on_base=True, baby_formula_enabled=False, valid=True,
+        )
+        with patch.object(coordinator, "async_set_updated_data"), \
+             patch.object(coordinator, "_enter_active_polling") as mock_enter:
+            coordinator._update_data_from_status(status)
+            mock_enter.assert_not_called()
+
+    def test_update_data_from_status_no_active_polling_on_first_update(self, coordinator):
+        """Test that first extended status update doesn't trigger active polling."""
+        coordinator.data = None
+        from custom_components.cosori_kettle_ble.cosori_kettle.protocol import ExtendedStatus
+        status = ExtendedStatus(
+            stage=1, mode=0x04, setpoint=212, temp=92, my_temp=140,
+            configured_hold_time=0, remaining_hold_time=0,
+            on_base=True, baby_formula_enabled=False, valid=True,
+        )
+        with patch.object(coordinator, "async_set_updated_data"), \
+             patch.object(coordinator, "_enter_active_polling") as mock_enter:
+            coordinator._update_data_from_status(status)
+            mock_enter.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_async_update_data_reverts_interval_after_active_window(self, coordinator, mock_cosori_client):
+        """Test that the interval reverts to idle after the active window expires."""
+        from datetime import timedelta
+        coordinator._client = mock_cosori_client
+        coordinator.data = {"stage": 0}
+        # Simulate an already-expired active window
+        coordinator._last_major_change_at = time.monotonic() - ACTIVE_POLL_WINDOW - 1
+        coordinator.update_interval = timedelta(seconds=ACTIVE_POLL_INTERVAL)
+
+        await coordinator._async_update_data()
+
+        assert coordinator.update_interval == timedelta(seconds=UPDATE_INTERVAL)
+
+    @pytest.mark.asyncio
+    async def test_async_update_data_keeps_active_interval_within_window(self, coordinator, mock_cosori_client):
+        """Test that the active interval is preserved within the active window."""
+        from datetime import timedelta
+        coordinator._client = mock_cosori_client
+        coordinator.data = {"stage": 0}
+        # Simulate a recent major change (still within active window)
+        coordinator._last_major_change_at = time.monotonic() - 10
+        coordinator.update_interval = timedelta(seconds=ACTIVE_POLL_INTERVAL)
+
+        await coordinator._async_update_data()
+
+        assert coordinator.update_interval == timedelta(seconds=ACTIVE_POLL_INTERVAL)
+
+    @pytest.mark.asyncio
+    async def test_async_update_data_warns_on_idle_timeout(self, coordinator, mock_cosori_client):
+        """Test that a warning is logged when no data received for over an hour."""
+        coordinator._client = mock_cosori_client
+        coordinator.data = {}
+        # Simulate device not heard from for over an hour
+        coordinator._last_frame_received_at = time.monotonic() - IDLE_TIMEOUT_SECS - 1
+
+        with patch("custom_components.cosori_kettle_ble.coordinator._LOGGER") as mock_logger:
+            await coordinator._async_update_data()
+            mock_logger.warning.assert_any_call(
+                "No data received from %s for over an hour, requesting status",
+                coordinator._ble_device.address,
+            )
+
+    @pytest.mark.asyncio
+    async def test_async_update_data_no_idle_warning_when_recent(self, coordinator, mock_cosori_client):
+        """Test that no idle warning is logged when data was recently received."""
+        coordinator._client = mock_cosori_client
+        coordinator.data = {}
+        # Simulate recent data
+        coordinator._last_frame_received_at = time.monotonic() - 60
+
+        with patch("custom_components.cosori_kettle_ble.coordinator._LOGGER") as mock_logger:
+            await coordinator._async_update_data()
+            # Should not have called warning with idle message
+            for call_args in mock_logger.warning.call_args_list:
+                assert "over an hour" not in str(call_args)
 
 
 class TestCoordinatorIntegration:

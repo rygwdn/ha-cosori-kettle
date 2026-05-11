@@ -73,6 +73,9 @@ CONF_PROTOCOL_VERSION: Final = "protocol_version"
 CONF_REGISTRATION_KEY: Final = "registration_key"
 
 # Update interval and retry settings
-UPDATE_INTERVAL: Final = 15  # seconds
+UPDATE_INTERVAL: Final = 900  # seconds (15 minutes, idle polling baseline)
+ACTIVE_POLL_INTERVAL: Final = 60  # seconds between polls during active monitoring window
+ACTIVE_POLL_WINDOW: Final = 900  # seconds of active monitoring after a major state change (15 min)
+IDLE_TIMEOUT_SECS: Final = 3600  # seconds without data before forcing a status request (1 hour)
 ACK_TIMEOUT_RETRY_DELAY: Final = 5  # seconds before retrying after ACK timeout
 MAX_RECONNECT_ATTEMPTS: Final = 3  # max attempts to reconnect on disconnect

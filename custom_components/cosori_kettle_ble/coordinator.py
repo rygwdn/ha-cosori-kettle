@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 from datetime import timedelta
 import logging
+import time
 from typing import Any
 
 from bleak.backends.device import BLEDevice
@@ -22,7 +23,10 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from .const import (
     ACK_HEADER_TYPE,
     ACK_TIMEOUT_RETRY_DELAY,
+    ACTIVE_POLL_INTERVAL,
+    ACTIVE_POLL_WINDOW,
     DOMAIN,
+    IDLE_TIMEOUT_SECS,
     MAX_RECONNECT_ATTEMPTS,
     PROTOCOL_VERSION_V1,
     UPDATE_INTERVAL,
@@ -80,6 +84,10 @@ class CosoriKettleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         # BLE client (will be initialized in async_start)
         self._client: CosoriKettleBLEClient | None = None
+
+        # Adaptive polling state
+        self._last_frame_received_at: float | None = None  # monotonic time of last received frame
+        self._last_major_change_at: float | None = None    # monotonic time of last major state change
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -207,6 +215,13 @@ class CosoriKettleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         _LOGGER.warning("Disconnected from %s", self._ble_device.address)
         # The next update cycle will attempt to reconnect
 
+    def _enter_active_polling(self) -> None:
+        """Switch to 1-minute polling for the next 15 minutes after a major state change."""
+        self._last_major_change_at = time.monotonic()
+        if self.update_interval != timedelta(seconds=ACTIVE_POLL_INTERVAL):
+            self.update_interval = timedelta(seconds=ACTIVE_POLL_INTERVAL)
+            self._schedule_refresh()
+
     async def _disconnect(self) -> None:
         """Disconnect from the device."""
         if self._client:
@@ -236,6 +251,7 @@ class CosoriKettleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if len(frame.payload) < 2:
             return
 
+        self._last_frame_received_at = time.monotonic()
         cmd_id = frame.payload[1]
 
         if cmd_id == CMD_POLL:
@@ -251,6 +267,22 @@ class CosoriKettleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def _update_data_from_status(self, status: ExtendedStatus) -> None:
         """Update coordinator data from extended status."""
+        if self.data:
+            prev = self.data
+            if (prev.get("stage") != status.stage
+                    or prev.get("mode") != status.mode
+                    or prev.get("setpoint") != status.setpoint
+                    or prev.get("on_base") != status.on_base):
+                _LOGGER.debug(
+                    "Major state change in extended status: "
+                    "stage %s→%s  mode %s→%s  setpoint %s→%s  on_base %s→%s",
+                    prev.get("stage"), status.stage,
+                    prev.get("mode"), status.mode,
+                    prev.get("setpoint"), status.setpoint,
+                    prev.get("on_base"), status.on_base,
+                )
+                self._enter_active_polling()
+
         self.async_set_updated_data({
             "stage": status.stage,
             "mode": status.mode,
@@ -322,9 +354,10 @@ class CosoriKettleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         self.async_set_updated_data(data)
 
-        # If state changed (not just temperature), request full status immediately
+        # If state changed (not just temperature), enter active polling and fetch full status
         if state_changed:
-            _LOGGER.debug("State change detected in compact status, requesting full status")
+            _LOGGER.debug("State change detected in compact status, entering active polling")
+            self._enter_active_polling()
             asyncio.create_task(self._request_full_status())
 
     async def _request_full_status(self) -> None:
@@ -383,11 +416,27 @@ class CosoriKettleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Poll the device for status."""
+        # Revert to idle poll interval once the active monitoring window expires
+        now = time.monotonic()
+        if (self._last_major_change_at is not None
+                and now - self._last_major_change_at >= ACTIVE_POLL_WINDOW
+                and self.update_interval != timedelta(seconds=UPDATE_INTERVAL)):
+            _LOGGER.debug("Active polling window expired, reverting to %ds interval", UPDATE_INTERVAL)
+            self.update_interval = timedelta(seconds=UPDATE_INTERVAL)
+
         async with self._lock:
             try:
                 # Ensure connection
                 if not self._client or not self._client.is_connected:
                     await self._connect()
+
+                # Warn if we haven't heard from the device in a long time
+                if (self._last_frame_received_at is not None
+                        and time.monotonic() - self._last_frame_received_at > IDLE_TIMEOUT_SECS):
+                    _LOGGER.warning(
+                        "No data received from %s for over an hour, requesting status",
+                        self._ble_device.address,
+                    )
 
                 # Request status and wait for ACK
                 await self._client.send_status_request(wait_for_ack=True)
