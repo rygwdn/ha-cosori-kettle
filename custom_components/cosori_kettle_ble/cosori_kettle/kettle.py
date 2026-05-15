@@ -120,15 +120,16 @@ class CosoriKettle:
     async def pair(self) -> None:
         """Pair with the kettle using registration key.
 
-        This should be called during initial setup when the device
-        is in pairing mode.
+        Handles the full connection sequence for initial pairing:
+        connects at the BLE level, registers the key, then sends hello.
+        Do NOT use the async context manager for pairing -- it calls
+        connect() which sends hello before registration.
 
         Raises:
             DeviceNotInPairingModeError: Device not in pairing mode
-            RuntimeError: Not connected to device
         """
         if not self.is_connected:
-            raise RuntimeError("Must connect to device before pairing")
+            await self._client.connect()
 
         await self._send_register()
         # After successful registration, send hello
