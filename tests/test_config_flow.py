@@ -5,7 +5,7 @@ from homeassistant import data_entry_flow
 from homeassistant.const import CONF_ADDRESS
 from homeassistant.data_entry_flow import FlowResultType
 
-from custom_components.cosori_kettle_ble.const import SERVICE_UUID
+from custom_components.cosori_kettle_ble.const import CONF_DEVICE_ID, CONF_REGISTRATION_KEY, SERVICE_UUID
 from custom_components.cosori_kettle_ble.config_flow import CosoriKettleConfigFlow
 
 
@@ -207,3 +207,124 @@ class TestAsyncStepUser:
             assert result["type"] == FlowResultType.FORM
             # The form should show "Cosori Kettle" as fallback name
             assert len(mock_config_flow._discovered_devices) == 1
+
+
+class TestReauth:
+    """Test the reauthentication flow."""
+
+    @pytest.mark.asyncio
+    async def test_reauth_shows_confirm_form(self, mock_config_flow):
+        """Test that reauth step shows a confirmation form."""
+        mock_entry = MagicMock()
+        mock_entry.data = {
+            CONF_DEVICE_ID: "AA:BB:CC:DD:EE:FF",
+            CONF_REGISTRATION_KEY: "deadbeef" * 4,
+        }
+        mock_config_flow.hass.config_entries.async_get_entry.return_value = mock_entry
+        mock_config_flow.context = {"entry_id": "test_entry_id"}
+
+        result = await mock_config_flow.async_step_reauth(mock_entry.data)
+
+        assert result["type"] == FlowResultType.FORM
+        assert result["step_id"] == "reauth_confirm"
+
+    @pytest.mark.asyncio
+    async def test_reauth_confirm_proceeds_to_pairing(self, mock_config_flow):
+        """Test that confirming reauth proceeds to pairing mode selection."""
+        mock_entry = MagicMock()
+        mock_entry.data = {CONF_DEVICE_ID: "AA:BB:CC:DD:EE:FF"}
+        mock_config_flow._update_entry = mock_entry
+        mock_config_flow._selected_address = "AA:BB:CC:DD:EE:FF"
+
+        with patch.object(
+            mock_config_flow, "async_step_pairing_mode", new_callable=AsyncMock
+        ) as mock_pairing:
+            mock_pairing.return_value = {"type": FlowResultType.FORM, "step_id": "pairing_mode"}
+            result = await mock_config_flow.async_step_reauth_confirm(user_input={})
+
+        mock_pairing.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_reauth_updates_entry_on_success(self, mock_config_flow):
+        """Test that successful reauth updates the config entry."""
+        mock_entry = MagicMock()
+        mock_entry.data = {CONF_DEVICE_ID: "AA:BB:CC:DD:EE:FF"}
+        mock_config_flow._update_entry = mock_entry
+        mock_config_flow._selected_address = "AA:BB:CC:DD:EE:FF"
+        mock_config_flow._discovery_info = None
+
+        new_key = "ab" * 16
+        mock_ble_device = MagicMock()
+
+        with patch(
+            "custom_components.cosori_kettle_ble.config_flow.bluetooth.async_ble_device_from_address",
+            return_value=mock_ble_device,
+        ), patch(
+            "custom_components.cosori_kettle_ble.config_flow.CosoriKettle"
+        ) as mock_kettle_cls, patch.object(
+            mock_config_flow, "async_update_reload_and_abort"
+        ) as mock_update:
+            mock_kettle = AsyncMock()
+            mock_kettle_cls.return_value.__aenter__ = AsyncMock(return_value=mock_kettle)
+            mock_kettle_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            mock_update.return_value = {"type": FlowResultType.ABORT, "reason": "reauth_successful"}
+
+            await mock_config_flow.async_step_enter_key(
+                user_input={"registration_key": new_key}
+            )
+
+        mock_update.assert_called_once()
+        call_kwargs = mock_update.call_args
+        assert call_kwargs[1]["data_updates"][CONF_REGISTRATION_KEY] == new_key
+
+
+class TestReconfigure:
+    """Test the reconfigure flow."""
+
+    @pytest.mark.asyncio
+    async def test_reconfigure_sets_address_and_proceeds(self, mock_config_flow):
+        """Test that reconfigure sets the address from the existing entry."""
+        mock_entry = MagicMock()
+        mock_entry.data = {CONF_DEVICE_ID: "AA:BB:CC:DD:EE:FF"}
+
+        with patch.object(
+            mock_config_flow, "_get_reconfigure_entry", return_value=mock_entry
+        ), patch.object(
+            mock_config_flow, "async_step_pairing_mode", new_callable=AsyncMock
+        ) as mock_pairing:
+            mock_pairing.return_value = {"type": FlowResultType.FORM, "step_id": "pairing_mode"}
+            await mock_config_flow.async_step_reconfigure()
+
+        assert mock_config_flow._selected_address == "AA:BB:CC:DD:EE:FF"
+        assert mock_config_flow._update_entry is mock_entry
+        mock_pairing.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_reconfigure_updates_entry_on_pair(self, mock_config_flow):
+        """Test that successful pairing during reconfigure updates the config entry."""
+        mock_entry = MagicMock()
+        mock_entry.data = {CONF_DEVICE_ID: "AA:BB:CC:DD:EE:FF"}
+        mock_config_flow._update_entry = mock_entry
+        mock_config_flow._selected_address = "AA:BB:CC:DD:EE:FF"
+        mock_config_flow._discovery_info = None
+
+        mock_ble_device = MagicMock()
+
+        with patch(
+            "custom_components.cosori_kettle_ble.config_flow.bluetooth.async_ble_device_from_address",
+            return_value=mock_ble_device,
+        ), patch(
+            "custom_components.cosori_kettle_ble.config_flow.CosoriKettle"
+        ) as mock_kettle_cls, patch.object(
+            mock_config_flow, "async_update_reload_and_abort"
+        ) as mock_update:
+            mock_kettle = AsyncMock()
+            mock_kettle_cls.return_value.__aenter__ = AsyncMock(return_value=mock_kettle)
+            mock_kettle_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            mock_kettle.pair = AsyncMock()
+            mock_update.return_value = {"type": FlowResultType.ABORT, "reason": "reauth_successful"}
+
+            await mock_config_flow.async_step_pair_device(user_input={})
+
+        mock_update.assert_called_once()
+        assert CONF_REGISTRATION_KEY in mock_update.call_args[1]["data_updates"]

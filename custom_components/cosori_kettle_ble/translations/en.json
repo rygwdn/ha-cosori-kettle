@@ -1,6 +1,10 @@
 {
   "config": {
     "step": {
+      "reauth_confirm": {
+        "title": "Re-authenticate Cosori Kettle",
+        "description": "The registration key for your kettle was rejected. You'll need to re-pair to restore the connection."
+      },
       "user": {
         "title": "Select Cosori Kettle",
         "description": "Select your Cosori Kettle from the list of discovered devices.",
@@ -43,7 +47,9 @@
       "already_configured": "Device is already configured",
       "not_supported": "This device is not a Cosori Kettle",
       "no_devices_found": "No Cosori Kettle devices found",
-      "device_not_found": "Device is no longer available"
+      "device_not_found": "Device is no longer available",
+      "reauth_successful": "Re-authentication was successful",
+      "reconfigure_successful": "Reconfiguration was successful"
     }
   }
 }
