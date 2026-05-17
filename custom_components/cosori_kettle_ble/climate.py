@@ -18,15 +18,12 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
-    DOMAIN,
     MAX_TEMP_F,
     MIN_TEMP_F,
     MODE_BOIL,
     MODE_COFFEE,
     MODE_GREEN_TEA,
-    MODE_HEAT,
     MODE_MY_TEMP,
-    MODE_NAMES,
     MODE_OOLONG,
 )
 from .coordinator import CosoriKettleCoordinator
@@ -65,7 +62,7 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up the climate platform."""
-    coordinator: CosoriKettleCoordinator = hass.data[DOMAIN][entry.entry_id]
+    coordinator: CosoriKettleCoordinator = entry.runtime_data
     async_add_entities([CosoriKettleClimate(coordinator)])
 
 

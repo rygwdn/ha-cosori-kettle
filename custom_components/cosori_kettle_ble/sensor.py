@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 import logging
+from typing import Any
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -14,15 +15,8 @@ from homeassistant.components.sensor import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfTemperature, UnitOfTime
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.device_registry import (
-    CONNECTION_BLUETOOTH,
-    DeviceInfo,
-    format_mac,
-)
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
-
-from .const import DOMAIN, MODE_NAMES
 from .coordinator import CosoriKettleCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -32,7 +26,7 @@ _LOGGER = logging.getLogger(__name__)
 class CosoriKettleSensorEntityDescription(SensorEntityDescription):
     """Describes Cosori Kettle sensor entity."""
 
-    value_fn: Callable[[dict], any] | None = None
+    value_fn: Callable[[dict], Any] | None = None
     display_precision: int | None = None
 
 
@@ -109,7 +103,7 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up the sensor platform."""
-    coordinator: CosoriKettleCoordinator = hass.data[DOMAIN][entry.entry_id]
+    coordinator: CosoriKettleCoordinator = entry.runtime_data
     async_add_entities(
         CosoriKettleSensor(coordinator, description)
         for description in SENSORS
@@ -134,7 +128,7 @@ class CosoriKettleSensor(CoordinatorEntity[CosoriKettleCoordinator], SensorEntit
         self._attr_device_info = coordinator.device_info
 
     @property
-    def native_value(self) -> any:
+    def native_value(self) -> Any:
         """Return the state of the sensor."""
         if self.coordinator.data and self.entity_description.value_fn:
             return self.entity_description.value_fn(self.coordinator.data)

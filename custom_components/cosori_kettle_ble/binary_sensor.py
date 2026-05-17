@@ -15,7 +15,6 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN
 from .coordinator import CosoriKettleCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -43,7 +42,7 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up the binary sensor platform."""
-    coordinator: CosoriKettleCoordinator = hass.data[DOMAIN][entry.entry_id]
+    coordinator: CosoriKettleCoordinator = entry.runtime_data
 
     async_add_entities(
         CosoriKettleBinarySensor(coordinator, description)

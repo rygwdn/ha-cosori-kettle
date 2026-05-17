@@ -9,7 +9,7 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 
-from .const import CONF_DEVICE_ID, CONF_REGISTRATION_KEY, DOMAIN
+from .const import CONF_DEVICE_ID, CONF_REGISTRATION_KEY
 from .coordinator import CosoriKettleCoordinator
 
 __version__ = "1.0.0"
@@ -67,7 +67,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         raise ConfigEntryNotReady(f"Failed to connect to device: {err}") from err
 
     # Store coordinator
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
+    entry.runtime_data = coordinator
 
     # Forward to platforms
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -79,12 +79,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     # Unload platforms
     if unload_ok := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
-        # Stop coordinator
-        coordinator: CosoriKettleCoordinator = hass.data[DOMAIN][entry.entry_id]
+        coordinator: CosoriKettleCoordinator = entry.runtime_data
         await coordinator.async_stop()
-
-        # Remove from hass.data
-        hass.data[DOMAIN].pop(entry.entry_id)
 
     return unload_ok
 

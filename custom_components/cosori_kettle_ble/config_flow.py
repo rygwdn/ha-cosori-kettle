@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 import secrets
 from typing import Any
 
@@ -10,8 +11,8 @@ import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.components import bluetooth
 from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
+from homeassistant.config_entries import ConfigEntry, ConfigFlowResult
 from homeassistant.const import CONF_ADDRESS
-from homeassistant.data_entry_flow import FlowResult
 
 from .const import CONF_DEVICE_ID, CONF_REGISTRATION_KEY, DOMAIN, SERVICE_UUID
 from .cosori_kettle.exceptions import (
@@ -35,10 +36,38 @@ class CosoriKettleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._discovered_devices: dict[str, BluetoothServiceInfoBleak] = {}
         self._selected_address: str | None = None
         self._pairing_mode: str | None = None
+        self._update_entry: ConfigEntry | None = None
+
+    async def async_step_reauth(
+        self, entry_data: Mapping[str, Any]
+    ) -> ConfigFlowResult:
+        """Handle reauthentication after key rejection."""
+        self._update_entry = self.hass.config_entries.async_get_entry(
+            self.context["entry_id"]
+        )
+        self._selected_address = self._update_entry.data[CONF_DEVICE_ID]
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Show explanation and proceed to re-pairing."""
+        if user_input is not None:
+            return await self.async_step_pairing_mode()
+        self._set_confirm_only()
+        return self.async_show_form(step_id="reauth_confirm")
+
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Handle reconfiguration to update the registration key."""
+        self._update_entry = self._get_reconfigure_entry()
+        self._selected_address = self._update_entry.data[CONF_DEVICE_ID]
+        return await self.async_step_pairing_mode()
 
     async def async_step_bluetooth(
         self, discovery_info: BluetoothServiceInfoBleak
-    ) -> FlowResult:
+    ) -> ConfigFlowResult:
         """Handle the bluetooth discovery step."""
         await self.async_set_unique_id(discovery_info.address)
         self._abort_if_unique_id_configured()
@@ -55,7 +84,7 @@ class CosoriKettleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     async def async_step_confirm(
         self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    ) -> ConfigFlowResult:
         """Handle user confirmation of discovered device."""
         assert self._discovery_info is not None
 
@@ -76,7 +105,7 @@ class CosoriKettleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     async def async_step_pairing_mode(
         self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    ) -> ConfigFlowResult:
         """Ask user if they have an existing key or want to pair."""
         if user_input is not None:
             self._pairing_mode = user_input["pairing_mode"]
@@ -112,7 +141,7 @@ class CosoriKettleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     async def async_step_pair_device(
         self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    ) -> ConfigFlowResult:
         """Pair with a new device by generating and registering a key."""
         errors = {}
 
@@ -135,7 +164,11 @@ class CosoriKettleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 async with CosoriKettle(ble_device, registration_key) as kettle:
                     await kettle.pair()  # Sends register + hello
 
-                # Success! Create config entry
+                if self._update_entry:
+                    return self.async_update_reload_and_abort(
+                        self._update_entry,
+                        data_updates={CONF_REGISTRATION_KEY: registration_key.hex()},
+                    )
                 return self.async_create_entry(
                     title=self._discovery_info.name or "Cosori Kettle"
                     if self._discovery_info
@@ -167,7 +200,7 @@ class CosoriKettleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     async def async_step_enter_key(
         self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    ) -> ConfigFlowResult:
         """Allow user to enter existing registration key."""
         errors = {}
 
@@ -199,7 +232,11 @@ class CosoriKettleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                             # connect() calls _send_hello() which validates key
                             pass  # If we get here, key is valid
 
-                        # Success! Create config entry
+                        if self._update_entry:
+                            return self.async_update_reload_and_abort(
+                                self._update_entry,
+                                data_updates={CONF_REGISTRATION_KEY: registration_key_hex},
+                            )
                         return self.async_create_entry(
                             title=self._discovery_info.name or "Cosori Kettle"
                             if self._discovery_info
@@ -236,7 +273,7 @@ class CosoriKettleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     async def async_step_capture_packets(
         self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    ) -> ConfigFlowResult:
         """Parse registration key from captured Bluetooth packets."""
         errors = {}
 
@@ -267,7 +304,11 @@ class CosoriKettleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         # connect() calls _send_hello() which validates key
                         pass  # If we get here, key is valid
 
-                    # Success! Create config entry
+                    if self._update_entry:
+                        return self.async_update_reload_and_abort(
+                            self._update_entry,
+                            data_updates={CONF_REGISTRATION_KEY: registration_key.hex()},
+                        )
                     return self.async_create_entry(
                         title=self._discovery_info.name or "Cosori Kettle"
                         if self._discovery_info
@@ -317,7 +358,7 @@ class CosoriKettleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    ) -> ConfigFlowResult:
         """Handle the user step to pick discovered device."""
         if user_input is not None:
             address = user_input[CONF_ADDRESS]
