@@ -10,11 +10,12 @@ from homeassistant.components.number import (
     NumberMode,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import UnitOfTime
+from homeassistant.const import UnitOfTemperature, UnitOfTime
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
+from .const import MAX_TEMP_F, MIN_TEMP_F
 from .coordinator import CosoriKettleCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -30,6 +31,17 @@ KEEP_WARM_DURATION = NumberEntityDescription(
     mode=NumberMode.BOX,
 )
 
+MY_BREW_TEMPERATURE = NumberEntityDescription(
+    key="my_temp",
+    name="MyBrew Temperature",
+    device_class=NumberDeviceClass.TEMPERATURE,
+    native_unit_of_measurement=UnitOfTemperature.FAHRENHEIT,
+    native_min_value=MIN_TEMP_F,
+    native_max_value=MAX_TEMP_F,
+    native_step=1,
+    mode=NumberMode.BOX,
+)
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -38,7 +50,10 @@ async def async_setup_entry(
 ) -> None:
     """Set up the number platform."""
     coordinator: CosoriKettleCoordinator = entry.runtime_data
-    async_add_entities([CosoriKettleKeepWarmDuration(coordinator)])
+    async_add_entities([
+        CosoriKettleKeepWarmDuration(coordinator),
+        CosoriKettleMyBrewTemperature(coordinator),
+    ])
 
 
 class CosoriKettleKeepWarmDuration(CoordinatorEntity[CosoriKettleCoordinator], NumberEntity):
@@ -65,4 +80,33 @@ class CosoriKettleKeepWarmDuration(CoordinatorEntity[CosoriKettleCoordinator], N
         """Set the keep warm duration."""
         seconds = int(value * 60)
         await self.coordinator.async_set_hold_time(seconds)
+        await self.coordinator.async_request_refresh()
+
+
+class CosoriKettleMyBrewTemperature(CoordinatorEntity[CosoriKettleCoordinator], NumberEntity):
+    """Number entity for MyBrew custom temperature setting."""
+
+    entity_description = MY_BREW_TEMPERATURE
+    _attr_has_entity_name = True
+
+    def __init__(self, coordinator: CosoriKettleCoordinator) -> None:
+        """Initialize the entity."""
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.formatted_address}_my_temp"
+        self._attr_device_info = coordinator.device_info
+
+    @property
+    def native_value(self) -> float | None:
+        """Return the current MyBrew temperature setting."""
+        if not self.coordinator.data:
+            return None
+        my_temp = self.coordinator.data.get("my_temp")
+        if not my_temp or my_temp < MIN_TEMP_F or my_temp > MAX_TEMP_F:
+            return None
+        return float(my_temp)
+
+    async def async_set_native_value(self, value: float) -> None:
+        """Set the MyBrew temperature setting."""
+        temp_f = int(value)
+        await self.coordinator.async_set_my_temp(temp_f)
         await self.coordinator.async_request_refresh()

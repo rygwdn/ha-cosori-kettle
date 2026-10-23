@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
+import re
 import secrets
 from typing import Any
 
@@ -23,6 +24,21 @@ from .cosori_kettle.kettle import CosoriKettle
 from .cosori_kettle.protocol import parse_registration_key_from_packets
 
 _LOGGER = logging.getLogger(__name__)
+
+MAC_REGEX = re.compile(r"^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$")
+MANUAL_MAC_OPTION = "manual"
+
+
+def _is_cosori_device(info: BluetoothServiceInfoBleak) -> bool:
+    """Check if discovered Bluetooth device is a Cosori kettle."""
+    name = (info.name or "").lower()
+    if any(k in name for k in ("cosori", "kettle", "cs108", "vesync")):
+        return True
+    for uuid in info.service_uuids:
+        uuid_str = str(uuid).lower()
+        if SERVICE_UUID.lower() in uuid_str or "fff0" in uuid_str:
+            return True
+    return False
 
 
 class CosoriKettleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -74,10 +90,8 @@ class CosoriKettleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         self._discovery_info = discovery_info
 
-        # Check if device has our service
-        if SERVICE_UUID.lower() not in [
-            str(uuid).lower() for uuid in discovery_info.service_uuids
-        ]:
+        # Check if device is supported
+        if not _is_cosori_device(discovery_info):
             return self.async_abort(reason="not_supported")
 
         return await self.async_step_confirm()
@@ -362,10 +376,13 @@ class CosoriKettleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Handle the user step to pick discovered device."""
         if user_input is not None:
             address = user_input[CONF_ADDRESS]
+            if address == MANUAL_MAC_OPTION:
+                return await self.async_step_manual()
+
             await self.async_set_unique_id(address, raise_on_progress=False)
             self._abort_if_unique_id_configured()
 
-            self._discovery_info = self._discovered_devices[address]
+            self._discovery_info = self._discovered_devices.get(address)
             self._selected_address = address
 
             # Go to pairing mode selection
@@ -379,18 +396,50 @@ class CosoriKettleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         for info in discovered:
             if info.address in current_addresses:
                 continue
-            if info.name == "Cosori Gooseneck Kettle" or SERVICE_UUID.lower() in [str(uuid).lower() for uuid in info.service_uuids]:
+            if _is_cosori_device(info):
                 self._discovered_devices[info.address] = info
 
         if not self._discovered_devices:
-            return self.async_abort(reason="no_devices_found")
+            return await self.async_step_manual()
+
+        options = {
+            address: f"{info.name or 'Cosori Kettle'} ({address})"
+            for address, info in self._discovered_devices.items()
+        }
+        options[MANUAL_MAC_OPTION] = "Enter MAC address manually"
 
         return self.async_show_form(
             step_id="user",
             data_schema=vol.Schema({
-                vol.Required(CONF_ADDRESS): vol.In({
-                    address: f"{info.name or 'Cosori Kettle'} ({address})"
-                    for address, info in self._discovered_devices.items()
-                }),
+                vol.Required(CONF_ADDRESS): vol.In(options),
             }),
+        )
+
+    async def async_step_manual(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Handle manual entry of MAC address."""
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            raw_address = user_input[CONF_ADDRESS].strip()
+            formatted_address = raw_address.replace("-", ":").upper()
+
+            if not MAC_REGEX.match(formatted_address):
+                errors[CONF_ADDRESS] = "invalid_mac_address"
+            else:
+                await self.async_set_unique_id(formatted_address, raise_on_progress=False)
+                self._abort_if_unique_id_configured()
+
+                self._selected_address = formatted_address
+                self._discovery_info = self._discovered_devices.get(formatted_address)
+
+                return await self.async_step_pairing_mode()
+
+        return self.async_show_form(
+            step_id="manual",
+            data_schema=vol.Schema({
+                vol.Required(CONF_ADDRESS): str,
+            }),
+            errors=errors,
         )

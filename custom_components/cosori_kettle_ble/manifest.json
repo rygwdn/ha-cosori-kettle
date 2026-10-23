@@ -9,6 +9,10 @@
     {
       "local_name": "Cosori Gooseneck Kettle",
       "connectable": true
+    },
+    {
+      "local_name": "Cosori*",
+      "connectable": true
     }
   ],
   "codeowners": [

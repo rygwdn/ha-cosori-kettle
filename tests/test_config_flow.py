@@ -40,7 +40,7 @@ class TestAsyncStepUser:
 
     @pytest.mark.asyncio
     async def test_no_devices_found(self, mock_config_flow):
-        """Test when no Cosori kettles are discovered."""
+        """Test when no Cosori kettles are discovered. Falls back to manual entry."""
         with patch(
             "custom_components.cosori_kettle_ble.config_flow.bluetooth.async_discovered_service_info"
         ) as mock_discover:
@@ -48,8 +48,8 @@ class TestAsyncStepUser:
 
             result = await mock_config_flow.async_step_user(user_input=None)
 
-            assert result["type"] == FlowResultType.ABORT
-            assert result["reason"] == "no_devices_found"
+            assert result["type"] == FlowResultType.FORM
+            assert result["step_id"] == "manual"
 
     @pytest.mark.asyncio
     async def test_devices_discovered(self, mock_config_flow, mock_bluetooth_service_info):
@@ -78,9 +78,10 @@ class TestAsyncStepUser:
 
             result = await mock_config_flow.async_step_user(user_input=None)
 
-            # Device should be filtered out, so no devices found
-            assert result["type"] == FlowResultType.ABORT
-            assert result["reason"] == "no_devices_found"
+            # Device should be filtered out, so no devices found. 
+            # Fall back to manual entry
+            assert result["type"] == FlowResultType.FORM
+            assert result["step_id"] == "manual"
 
     @pytest.mark.asyncio
     async def test_service_uuid_filtering(self, mock_config_flow):
@@ -207,6 +208,157 @@ class TestAsyncStepUser:
             assert result["type"] == FlowResultType.FORM
             # The form should show "Cosori Kettle" as fallback name
             assert len(mock_config_flow._discovered_devices) == 1
+
+    @pytest.mark.asyncio
+    async def test_form_includes_manual_option(self, mock_config_flow, mock_bluetooth_service_info):
+        """Test that the discovered-devices form includes a manual-entry option."""
+        with patch(
+            "custom_components.cosori_kettle_ble.config_flow.bluetooth.async_discovered_service_info"
+        ) as mock_discover:
+            mock_discover.return_value = [mock_bluetooth_service_info]
+
+            result = await mock_config_flow.async_step_user(user_input=None)
+
+            assert result["type"] == FlowResultType.FORM
+            schema = result["data_schema"].schema
+            address_key = next(k for k in schema if k == CONF_ADDRESS)
+            options = schema[address_key].container
+            assert "manual" in options
+            assert options["manual"] == "Enter MAC address manually"
+
+    @pytest.mark.asyncio
+    async def test_manual_option_selected(self, mock_config_flow, mock_bluetooth_service_info):
+        """Test that selecting the manual option routes to async_step_manual."""
+        mock_config_flow._discovered_devices = {
+            mock_bluetooth_service_info.address: mock_bluetooth_service_info
+        }
+
+        with patch.object(
+            mock_config_flow, "async_step_manual", new_callable=AsyncMock
+        ) as mock_step_manual:
+            mock_step_manual.return_value = {"type": FlowResultType.FORM, "step_id": "manual"}
+
+            result = await mock_config_flow.async_step_user(
+                user_input={CONF_ADDRESS: "manual"}
+            )
+
+            mock_step_manual.assert_called_once_with()
+            assert result["step_id"] == "manual"
+
+
+class TestAsyncStepManual:
+    """Test the async_step_manual method."""
+
+    @pytest.mark.asyncio
+    async def test_shows_form_initially(self, mock_config_flow):
+        """Test that calling with no user_input shows the manual entry form."""
+        result = await mock_config_flow.async_step_manual(user_input=None)
+
+        assert result["type"] == FlowResultType.FORM
+        assert result["step_id"] == "manual"
+        assert CONF_ADDRESS in result["data_schema"].schema
+
+    @pytest.mark.asyncio
+    async def test_valid_mac_proceeds_to_pairing_mode(self, mock_config_flow):
+        """Test that a valid MAC address proceeds to the pairing mode step."""
+        with patch.object(
+            mock_config_flow, "async_set_unique_id", new_callable=AsyncMock
+        ) as mock_set_unique_id, \
+        patch.object(
+            mock_config_flow, "_abort_if_unique_id_configured"
+        ) as mock_abort, \
+        patch.object(
+            mock_config_flow, "async_step_pairing_mode", new_callable=AsyncMock
+        ) as mock_pairing_mode:
+            mock_pairing_mode.return_value = {"type": FlowResultType.FORM}
+
+            result = await mock_config_flow.async_step_manual(
+                user_input={CONF_ADDRESS: "AA:BB:CC:DD:EE:FF"}
+            )
+
+            mock_set_unique_id.assert_called_once_with(
+                "AA:BB:CC:DD:EE:FF", raise_on_progress=False
+            )
+            mock_abort.assert_called_once()
+            assert mock_config_flow._selected_address == "AA:BB:CC:DD:EE:FF"
+            mock_pairing_mode.assert_called_once()
+            assert result["type"] == FlowResultType.FORM
+
+    @pytest.mark.asyncio
+    async def test_mac_with_dashes_normalized(self, mock_config_flow):
+        """Test that dash-separated MAC addresses are normalized to colons and uppercased."""
+        with patch.object(
+            mock_config_flow, "async_set_unique_id", new_callable=AsyncMock
+        ) as mock_set_unique_id, \
+        patch.object(
+            mock_config_flow, "_abort_if_unique_id_configured"
+        ), \
+        patch.object(
+            mock_config_flow, "async_step_pairing_mode", new_callable=AsyncMock
+        ) as mock_pairing_mode:
+            mock_pairing_mode.return_value = {"type": FlowResultType.FORM}
+
+            await mock_config_flow.async_step_manual(
+                user_input={CONF_ADDRESS: "aa-bb-cc-dd-ee-ff"}
+            )
+
+            mock_set_unique_id.assert_called_once_with(
+                "AA:BB:CC:DD:EE:FF", raise_on_progress=False
+            )
+            assert mock_config_flow._selected_address == "AA:BB:CC:DD:EE:FF"
+
+    @pytest.mark.asyncio
+    async def test_invalid_mac_shows_error(self, mock_config_flow):
+        """Test that an invalid MAC address shows a validation error."""
+        result = await mock_config_flow.async_step_manual(
+            user_input={CONF_ADDRESS: "not-a-mac-address"}
+        )
+
+        assert result["type"] == FlowResultType.FORM
+        assert result["step_id"] == "manual"
+        assert result["errors"][CONF_ADDRESS] == "invalid_mac_address"
+
+    @pytest.mark.asyncio
+    async def test_already_configured_mac_aborts(self, mock_config_flow):
+        """Test that a MAC address already configured aborts the flow."""
+        with patch.object(
+            mock_config_flow, "async_set_unique_id", new_callable=AsyncMock
+        ), \
+        patch.object(
+            mock_config_flow,
+            "_abort_if_unique_id_configured",
+            side_effect=data_entry_flow.AbortFlow("already_configured"),
+        ):
+            with pytest.raises(data_entry_flow.AbortFlow):
+                await mock_config_flow.async_step_manual(
+                    user_input={CONF_ADDRESS: "AA:BB:CC:DD:EE:FF"}
+                )
+
+    @pytest.mark.asyncio
+    async def test_manual_mac_matches_discovered_device(
+        self, mock_config_flow, mock_bluetooth_service_info
+    ):
+        """Test that a manually entered MAC matching a discovered device links its discovery info."""
+        mock_config_flow._discovered_devices = {
+            mock_bluetooth_service_info.address: mock_bluetooth_service_info
+        }
+
+        with patch.object(
+            mock_config_flow, "async_set_unique_id", new_callable=AsyncMock
+        ), \
+        patch.object(
+            mock_config_flow, "_abort_if_unique_id_configured"
+        ), \
+        patch.object(
+            mock_config_flow, "async_step_pairing_mode", new_callable=AsyncMock
+        ) as mock_pairing_mode:
+            mock_pairing_mode.return_value = {"type": FlowResultType.FORM}
+
+            await mock_config_flow.async_step_manual(
+                user_input={CONF_ADDRESS: mock_bluetooth_service_info.address}
+            )
+
+            assert mock_config_flow._discovery_info == mock_bluetooth_service_info
 
 
 class TestReauth:

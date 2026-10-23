@@ -10,6 +10,7 @@ from custom_components.cosori_kettle_ble.const import (
     CHAR_TX_UUID,
     DOMAIN,
     MESSAGE_HEADER_TYPE,
+    MODE_MY_TEMP,
     PROTOCOL_VERSION_V1,
     SERVICE_UUID,
     UPDATE_INTERVAL,
@@ -557,7 +558,25 @@ class TestCoordinatorCommandMethods:
         coordinator._client = mock_cosori_client
 
         await coordinator.async_set_mode(0x04, 212, 60)
-        mock_cosori_client.send_set_mode.assert_called_once()
+        mock_cosori_client.send_set_mode.assert_called_once_with(0x04, 212, 60)
+        mock_cosori_client.send_set_my_temp.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_async_set_mode_my_temp_sends_set_my_temp_first(
+        self, coordinator, mock_cosori_client
+    ):
+        """Test async_set_mode sends set_my_temp before set_mode for MODE_MY_TEMP."""
+        coordinator._client = mock_cosori_client
+
+        call_order = []
+        mock_cosori_client.send_set_my_temp.side_effect = lambda temp: call_order.append(f"set_my_temp:{temp}")
+        mock_cosori_client.send_set_mode.side_effect = lambda mode, temp, hold: call_order.append(f"set_mode:{mode}:{temp}:{hold}")
+
+        await coordinator.async_set_mode(MODE_MY_TEMP, 175, 0)
+
+        mock_cosori_client.send_set_my_temp.assert_called_once_with(175)
+        mock_cosori_client.send_set_mode.assert_called_once_with(MODE_MY_TEMP, 175, 0)
+        assert call_order == ["set_my_temp:175", f"set_mode:{MODE_MY_TEMP}:175:0"]
 
     @pytest.mark.asyncio
     async def test_async_set_mode_with_lock(self, coordinator, mock_cosori_client):

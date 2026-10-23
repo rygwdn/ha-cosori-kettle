@@ -24,6 +24,7 @@ from .const import (
     ACK_TIMEOUT_RETRY_DELAY,
     DOMAIN,
     MAX_RECONNECT_ATTEMPTS,
+    MODE_MY_TEMP,
     PROTOCOL_VERSION_V1,
     UPDATE_INTERVAL,
 )
@@ -450,6 +451,8 @@ class CosoriKettleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def async_set_mode(self, mode: int, temp_f: int, hold_time: int) -> None:
         """Set heating mode."""
         async with self._lock:
+            if mode == MODE_MY_TEMP:
+                await self._client.send_set_my_temp(temp_f)
             await self._client.send_set_mode(mode, temp_f, hold_time)
 
     async def async_set_my_temp(self, temp_f: int) -> None:

@@ -12,6 +12,13 @@
           "address": "Device"
         }
       },
+      "manual": {
+        "title": "Enter Device Address",
+        "description": "Enter the Bluetooth MAC address of your Cosori Kettle (e.g. AA:BB:CC:DD:EE:FF).",
+        "data": {
+          "address": "Bluetooth MAC Address"
+        }
+      },
       "confirm": {
         "title": "Add Cosori Kettle",
         "description": "Do you want to add {name} ({address})?"
@@ -45,6 +52,7 @@
       }
     },
     "error": {
+      "invalid_mac_address": "Invalid Bluetooth MAC address format. Expected format: AA:BB:CC:DD:EE:FF.",
       "device_not_in_pairing_mode": "Device is not in pairing mode. Press and hold the MyBrew button on the kettle and try again.",
       "pairing_failed": "Failed to pair with device. Please try again.",
       "invalid_key": "Registration key was rejected by device. Check the key and try again.",
